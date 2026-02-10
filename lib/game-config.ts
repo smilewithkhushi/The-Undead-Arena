@@ -16,7 +16,7 @@ export const GAME_CONFIG = {
     width: 88,
     height: 78,
     health: 3,
-    spawnY: 8
+    spawnY: 0
   },
   laser: {
     y: 410,
@@ -25,12 +25,45 @@ export const GAME_CONFIG = {
   }
 } as const;
 
-export const LEVEL_CONFIG = {
-  1: { zombies: 6, speed: 44, multiplier: null, spawnDelayRangeS: [2.6, 3.8] as const },
-  2: { zombies: 14, speed: 64, multiplier: 2, spawnDelayRangeS: [1.6, 2.8] as const },
-  3: { zombies: 24, speed: 96, multiplier: 5, spawnDelayRangeS: [1.05, 1.75] as const }
-} as const;
+export const LEVEL_COUNT = 21;
+export const FIBONACCI_LEVELS = [3, 5, 8, 13, 21] as const;
+
+export type LevelConfig = {
+  zombies: number;
+  speed: number;
+  multiplier: number | null;
+  spawnDelayRangeS: readonly [number, number];
+};
+
+export const LEVEL_CONFIG: Record<number, LevelConfig> = Object.fromEntries(
+  Array.from({ length: LEVEL_COUNT }, (_, index) => {
+    const level = index + 1;
+    const zombies = 10 + (level - 1) * 3;
+    const speed = Math.round(36 + level * 3.6);
+    const minDelay = Math.max(0.7, 2.8 - level * 0.08);
+    const maxDelay = Math.max(minDelay + 0.2, 4.0 - level * 0.11);
+
+    const multiplier =
+      level === 1
+        ? null
+        : level <= 7
+          ? 2
+          : level <= 14
+            ? 5
+            : 10;
+
+    return [
+      level,
+      {
+        zombies,
+        speed,
+        multiplier,
+        spawnDelayRangeS: [Number(minDelay.toFixed(2)), Number(maxDelay.toFixed(2))]
+      }
+    ];
+  })
+);
 
 export const CRITICAL_EVENT_TYPES = new Set(["laser_destroyed", "level_completed", "level_failed"]);
 
-export type LevelNumber = keyof typeof LEVEL_CONFIG;
+export type LevelNumber = number;

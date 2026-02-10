@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventClient } from "@/lib/event-client";
-import { GAME_CONFIG, LEVEL_CONFIG, type LevelNumber } from "@/lib/game-config";
+import { FIBONACCI_LEVELS, GAME_CONFIG, LEVEL_CONFIG, LEVEL_COUNT, type LevelNumber } from "@/lib/game-config";
 
 type GameStatus = "idle" | "running" | "won" | "lost" | "finished";
+type PlantType = "basic" | "double" | "triple";
+type ZombieKind = "rotter" | "ironhead" | "drdecay" | "shambler" | "catalyst";
 
 interface Pea {
   id: number;
@@ -17,11 +19,14 @@ interface Pea {
 
 interface Zombie {
   id: number;
+  kind: ZombieKind;
   x: number;
   y: number;
   health: number;
+  maxHealth: number;
   speed: number;
   aliveMs: number;
+  bucketBroken?: boolean;
 }
 
 interface Sparkle {
@@ -37,24 +42,59 @@ interface Sparkle {
 const CANVAS_W = GAME_CONFIG.canvas.width;
 const CANVAS_H = GAME_CONFIG.canvas.height;
 const LOSS_LINE_Y = CANVAS_H - 14;
-const MAX_ACTIVE_PEAS = 140;
+const MAX_ACTIVE_PEAS = 160;
 
 const ARENA_TOP_Y = 62;
 const ARENA_BOTTOM_Y = CANVAS_H - 12;
 const ARENA_TOP_WIDTH = 250;
 const ARENA_BOTTOM_WIDTH = CANVAS_W - 34;
 
+const UNLOCK_STORAGE_KEY = "pvza_unlocked_plants";
+const CATALYST_KILLS_STORAGE_KEY = "pvza_catalyst_kills";
+const ALL_PLANTS: PlantType[] = ["basic", "double", "triple"];
+
+const spritePaths = {
+  plantBasic: "/assets/front/plant-basic.png",
+  plantDouble: "/assets/front/plant-double.png",
+  plantTriple: "/assets/back/plant-triple.png",
+  zombieRotter: "/assets/zombie-rotter.png",
+  zombieIronhead: "/assets/zombie-ironhead.png",
+  zombieDrdecay: "/assets/zombie-drdecay.png",
+  zombieShambler: "/assets/zombie-shambler.png",
+  zombieCatalyst: "/assets/zombie-catalyst.png"
+} as const;
+
+function getPlantSpritePath(plant: PlantType): string {
+  if (plant === "double") return spritePaths.plantDouble;
+  if (plant === "triple") return spritePaths.plantTriple;
+  return spritePaths.plantBasic;
+}
+
+function getPlantLabel(plant: PlantType): string {
+  if (plant === "double") return "Double Shooter";
+  if (plant === "triple") return "Triple Shooter";
+  return "Basic Shooter";
+}
+
 export function GameCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const eventClientRef = useRef<EventClient | null>(null);
   const keysRef = useRef({ left: false, right: false });
+  const imagesRef = useRef<Record<string, HTMLImageElement>>({});
 
   const [level, setLevel] = useState<LevelNumber>(1);
   const [status, setStatus] = useState<GameStatus>("idle");
   const [laserActive, setLaserActive] = useState<boolean>(true);
   const [zombiesKilled, setZombiesKilled] = useState<number>(0);
   const [zombiesRemaining, setZombiesRemaining] = useState<number>(LEVEL_CONFIG[1].zombies);
+
+  const [unlockedPlants, setUnlockedPlants] = useState<PlantType[]>(["basic"]);
+  const [activePlant, setActivePlant] = useState<PlantType>("basic");
+  const [plantSelectionForModal, setPlantSelectionForModal] = useState<PlantType>("basic");
+  const [plantModalLevel, setPlantModalLevel] = useState<number | null>(null);
+  const [catalystKills, setCatalystKills] = useState<number>(0);
+  const [unlockNotice, setUnlockNotice] = useState<string | null>(null);
 
   const runtimeRef = useRef({
     cartX: CANVAS_W / 2 - GAME_CONFIG.cart.width / 2,
@@ -64,6 +104,8 @@ export function GameCanvas() {
     nextPeaId: 1,
     nextZombieId: 1,
     msSinceShot: 0,
+    doubleSecondDelayMs: 0,
+    doubleSecondPending: false,
     msSinceSpawn: 0,
     nextSpawnMs: 0,
     spawned: 0,
@@ -78,23 +120,73 @@ export function GameCanvas() {
     previousCartX: CANVAS_W / 2 - GAME_CONFIG.cart.width / 2,
     panicMeter: 0,
     threatDetectedAt: null as number | null,
-    threatResponseLogged: false
+    threatResponseLogged: false,
+    catalystSpawned: false,
+    shamblerSpawned: false
   });
 
   const levelCfg = useMemo(() => LEVEL_CONFIG[level], [level]);
   const score = zombiesKilled * 125 + (laserActive && LEVEL_CONFIG[level].multiplier ? 200 : 0);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(UNLOCK_STORAGE_KEY);
+    const storedKills = window.localStorage.getItem(CATALYST_KILLS_STORAGE_KEY);
+
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored) as PlantType[];
+        const safe = ALL_PLANTS.filter((p) => parsed.includes(p));
+        if (safe.length) {
+          setUnlockedPlants(safe);
+          setActivePlant(safe[safe.length - 1]);
+          setPlantSelectionForModal(safe[safe.length - 1]);
+        }
+      } catch {
+        // ignore invalid local data
+      }
+    }
+
+    if (storedKills) {
+      const parsedKills = Number(storedKills);
+      if (Number.isFinite(parsedKills)) {
+        setCatalystKills(parsedKills);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const map: Record<string, HTMLImageElement> = {};
+    for (const [key, path] of Object.entries(spritePaths)) {
+      const img = new Image();
+      img.src = path;
+      map[key] = img;
+    }
+    imagesRef.current = map;
+  }, []);
+
+  const persistUnlocks = (plants: PlantType[], kills: number) => {
+    window.localStorage.setItem(UNLOCK_STORAGE_KEY, JSON.stringify(plants));
+    window.localStorage.setItem(CATALYST_KILLS_STORAGE_KEY, String(kills));
+  };
 
   const randBetweenMs = (minS: number, maxS: number): number => {
     const seconds = Math.random() * (maxS - minS) + minS;
     return seconds * 1000;
   };
 
-  const startLevel = useCallback((levelNumber: LevelNumber) => {
+  const queueLevelStart = (levelNumber: number) => {
+    setPlantSelectionForModal(activePlant);
+    setPlantModalLevel(levelNumber);
+  };
+
+  const startLevel = useCallback((levelNumber: LevelNumber, plant: PlantType) => {
     setLevel(levelNumber);
     setStatus("running");
+    setActivePlant(plant);
     setLaserActive(LEVEL_CONFIG[levelNumber].multiplier !== null);
     setZombiesKilled(0);
     setZombiesRemaining(LEVEL_CONFIG[levelNumber].zombies);
+    setPlantModalLevel(null);
 
     runtimeRef.current = {
       cartX: CANVAS_W / 2 - GAME_CONFIG.cart.width / 2,
@@ -104,6 +196,8 @@ export function GameCanvas() {
       nextPeaId: 1,
       nextZombieId: 1,
       msSinceShot: 0,
+      doubleSecondDelayMs: 0,
+      doubleSecondPending: false,
       msSinceSpawn: 0,
       nextSpawnMs: randBetweenMs(
         LEVEL_CONFIG[levelNumber].spawnDelayRangeS[0],
@@ -121,11 +215,14 @@ export function GameCanvas() {
       previousCartX: CANVAS_W / 2 - GAME_CONFIG.cart.width / 2,
       panicMeter: 0,
       threatDetectedAt: null,
-      threatResponseLogged: false
+      threatResponseLogged: false,
+      catalystSpawned: false,
+      shamblerSpawned: false
     };
 
     eventClientRef.current?.track(levelNumber, "level_started", {
-      level: levelNumber
+      level: levelNumber,
+      active_plant: plant
     });
   }, []);
 
@@ -182,51 +279,130 @@ export function GameCanvas() {
       const deltaSec = deltaMs / 1000;
 
       if (status === "running") {
-        if (keysRef.current.left) {
-          rt.cartX -= GAME_CONFIG.cart.moveSpeed * deltaSec;
-        }
-        if (keysRef.current.right) {
-          rt.cartX += GAME_CONFIG.cart.moveSpeed * deltaSec;
-        }
+        const previousCartX = rt.cartX;
+
+        if (keysRef.current.left) rt.cartX -= GAME_CONFIG.cart.moveSpeed * deltaSec;
+        if (keysRef.current.right) rt.cartX += GAME_CONFIG.cart.moveSpeed * deltaSec;
+
         rt.cartX = Math.max(0, Math.min(CANVAS_W - GAME_CONFIG.cart.width, rt.cartX));
 
-        rt.msSinceShot += deltaMs;
-        if (rt.msSinceShot >= GAME_CONFIG.pea.fireIntervalMs) {
-          rt.msSinceShot -= GAME_CONFIG.pea.fireIntervalMs;
-          const pea: Pea = {
-            id: rt.nextPeaId++,
-            x: rt.cartX + GAME_CONFIG.cart.width / 2,
-            y: GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height,
-            wasMultiplied: false,
-            hasCrossedLaser: false,
-            speedFactor: 1
-          };
-          rt.peas.push(pea);
-          rt.peasFired += 1;
+        const laserThreats = rt.zombies.filter((zombie) => {
+          if (!rt.laserActive) return false;
+          const zombieBottom = zombie.y + getZombieHeight(zombie.kind);
+          return zombieBottom < GAME_CONFIG.laser.y && GAME_CONFIG.laser.y - zombieBottom <= 130;
+        });
 
-          if (rt.peas.length > MAX_ACTIVE_PEAS) {
-            rt.peas.splice(0, rt.peas.length - MAX_ACTIVE_PEAS);
+        const threatActive = laserThreats.length > 0;
+        const nearestThreatX = threatActive
+          ? laserThreats.reduce((closest, current) => {
+              const currentX = current.x + getZombieWidth(current.kind) / 2;
+              const closestX = closest.x + getZombieWidth(closest.kind) / 2;
+              return Math.abs(currentX - rt.cartX) < Math.abs(closestX - rt.cartX) ? current : closest;
+            }).x + getZombieWidth(laserThreats[0].kind) / 2
+          : null;
+
+        const moveDistance = Math.abs(rt.cartX - previousCartX);
+        if (moveDistance > 0.01) {
+          const towardThreat =
+            nearestThreatX === null
+              ? false
+              : Math.abs(rt.cartX + GAME_CONFIG.cart.width / 2 - nearestThreatX) <
+                Math.abs(previousCartX + GAME_CONFIG.cart.width / 2 - nearestThreatX);
+
+          eventClientRef.current?.track(level, "cart_moved", {
+            from_x: Math.round(previousCartX),
+            to_x: Math.round(rt.cartX),
+            distance: Number(moveDistance.toFixed(2)),
+            threat_active: threatActive,
+            toward_threat: towardThreat
+          });
+
+          if (threatActive && towardThreat) {
+            eventClientRef.current?.track(level, "laser_protected", {
+              threatening_zombies: laserThreats.length,
+              cart_x: Math.round(rt.cartX)
+            });
           }
 
-          eventClientRef.current?.track(level, "pea_fired", {
-            cart_x: Math.round(rt.cartX),
-            laser_aligned: Math.abs(pea.x - CANVAS_W / 2) < 110
+          rt.panicMeter = Math.max(0, rt.panicMeter * 0.92) + moveDistance;
+          if (rt.panicMeter > 260) {
+            eventClientRef.current?.track(level, "panic_detected", {
+              panic_meter: Number(rt.panicMeter.toFixed(2)),
+              threat_active: threatActive
+            });
+            rt.panicMeter = 0;
+          }
+
+          if (threatActive && towardThreat && rt.threatDetectedAt !== null && !rt.threatResponseLogged) {
+            eventClientRef.current?.track(level, "laser_threat_response", {
+              reaction_time_ms: Math.max(0, Math.round(ts - rt.threatDetectedAt))
+            });
+            rt.threatResponseLogged = true;
+          }
+        }
+
+        if (threatActive && rt.threatDetectedAt === null) {
+          rt.threatDetectedAt = ts;
+          rt.threatResponseLogged = false;
+          eventClientRef.current?.track(level, "laser_threat_detected", {
+            threatening_zombies: laserThreats.length
           });
         }
 
+        if (!threatActive) {
+          rt.threatDetectedAt = null;
+          rt.threatResponseLogged = false;
+        }
+
+        rt.previousCartX = rt.cartX;
+
+        rt.msSinceShot += deltaMs;
+
+        if (activePlant === "double") {
+          if (rt.doubleSecondPending) {
+            rt.doubleSecondDelayMs -= deltaMs;
+            if (rt.doubleSecondDelayMs <= 0) {
+              spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
+              rt.doubleSecondPending = false;
+            }
+          }
+
+          if (rt.msSinceShot >= GAME_CONFIG.pea.fireIntervalMs && !rt.doubleSecondPending) {
+            rt.msSinceShot = 0;
+            spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
+            rt.doubleSecondPending = true;
+            rt.doubleSecondDelayMs = 500;
+          }
+        } else if (rt.msSinceShot >= GAME_CONFIG.pea.fireIntervalMs) {
+          rt.msSinceShot = 0;
+
+          if (activePlant === "basic") {
+            spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
+          } else {
+            const baseX = rt.cartX + GAME_CONFIG.cart.width / 2;
+            spawnPea(rt, baseX - 28, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
+            spawnPea(rt, baseX, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
+            spawnPea(rt, baseX + 28, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
+          }
+        }
+
         rt.msSinceSpawn += deltaMs;
-        if (rt.spawned < LEVEL_CONFIG[level].zombies && rt.msSinceSpawn >= rt.nextSpawnMs) {
+        if (rt.spawned < levelCfg.zombies && rt.msSinceSpawn >= rt.nextSpawnMs) {
           rt.msSinceSpawn = 0;
           rt.nextSpawnMs = randBetweenMs(levelCfg.spawnDelayRangeS[0], levelCfg.spawnDelayRangeS[1]);
 
-          const zombie: Zombie = {
-            id: rt.nextZombieId++,
-            x: Math.random() * (CANVAS_W - GAME_CONFIG.zombie.width),
-            y: GAME_CONFIG.zombie.spawnY,
-            health: GAME_CONFIG.zombie.health,
-            speed: LEVEL_CONFIG[level].speed,
-            aliveMs: 0
-          };
+          const spawnIndex = rt.spawned;
+          const kind = pickZombieKind(level, spawnIndex, levelCfg.zombies, {
+            catalystSpawned: rt.catalystSpawned,
+            shamblerSpawned: rt.shamblerSpawned
+          });
+
+          if (kind === "catalyst") rt.catalystSpawned = true;
+          if (kind === "shambler") rt.shamblerSpawned = true;
+
+          const zombie = createZombie(kind, rt.nextZombieId++, levelCfg.speed);
+          zombie.x = Math.random() * (CANVAS_W - getZombieWidth(kind));
+          zombie.y = Math.max(0, GAME_CONFIG.zombie.spawnY);
           rt.zombies.push(zombie);
           rt.spawned += 1;
         }
@@ -287,11 +463,11 @@ export function GameCanvas() {
           if (rt.laserActive) {
             const touchesLaser =
               zombie.y <= GAME_CONFIG.laser.y + GAME_CONFIG.laser.height &&
-              zombie.y + GAME_CONFIG.zombie.height >= GAME_CONFIG.laser.y;
+              zombie.y + getZombieHeight(zombie.kind) >= GAME_CONFIG.laser.y;
             if (touchesLaser) {
               rt.laserActive = false;
               setLaserActive(false);
-              const progress = (rt.spawned / LEVEL_CONFIG[level].zombies) * 100;
+              const progress = (rt.spawned / levelCfg.zombies) * 100;
               rt.laserDestroyedAtWave = progress;
 
               if (multiplier !== null) {
@@ -299,32 +475,32 @@ export function GameCanvas() {
                   zombie_id: zombie.id,
                   multiplier_lost: multiplier,
                   wave_progress_percent: Number(progress.toFixed(2)),
-                  zombies_remaining: LEVEL_CONFIG[level].zombies - rt.killed
+                  zombies_remaining: levelCfg.zombies - rt.killed
                 });
               }
             }
           }
 
-          if (zombie.y + GAME_CONFIG.zombie.height >= LOSS_LINE_Y) {
+          if (zombie.y + getZombieHeight(zombie.kind) >= LOSS_LINE_Y) {
             rt.levelFailed = true;
             setStatus("lost");
-            const remaining = LEVEL_CONFIG[level].zombies - rt.killed;
+            const remaining = levelCfg.zombies - rt.killed;
             setZombiesRemaining(remaining);
             eventClientRef.current?.track(level, "level_failed", {
               zombies_killed: rt.killed,
               zombies_remaining: remaining,
-              laser_status: rt.laserActive ? "intact" : "destroyed"
+              laser_status: rt.laserActive ? "intact" : "destroyed",
+              score: rt.killed * 125 + (rt.laserActive && multiplier !== null ? 200 : 0)
             });
           }
 
-          if (!rt.levelFailed) {
-            zombieKeep.push(zombie);
-          }
+          if (!rt.levelFailed) zombieKeep.push(zombie);
         }
         rt.zombies = zombieKeep;
 
         const alivePeas: Pea[] = [];
         const aliveZombies = [...rt.zombies];
+
         for (const pea of rt.peas) {
           let consumed = false;
           for (const zombie of aliveZombies) {
@@ -334,47 +510,74 @@ export function GameCanvas() {
               GAME_CONFIG.pea.radius,
               zombie.x,
               zombie.y,
-              GAME_CONFIG.zombie.width,
-              GAME_CONFIG.zombie.height
+              getZombieWidth(zombie.kind),
+              getZombieHeight(zombie.kind)
             );
 
-            if (hitZombie) {
-              consumed = true;
-              zombie.health -= GAME_CONFIG.pea.damage;
-              rt.hits += 1;
+            if (!hitZombie) continue;
 
-              eventClientRef.current?.track(level, "pea_hit_zombie", {
+            consumed = true;
+            zombie.health -= GAME_CONFIG.pea.damage;
+            rt.hits += 1;
+
+            eventClientRef.current?.track(level, "pea_hit_zombie", {
+              zombie_id: zombie.id,
+              zombie_health_remaining: zombie.health,
+              was_multiplied: pea.wasMultiplied,
+              zombie_kind: zombie.kind
+            });
+
+            if (zombie.health <= 0) {
+              rt.killed += 1;
+              setZombiesKilled(rt.killed);
+              setZombiesRemaining(levelCfg.zombies - rt.killed);
+
+              eventClientRef.current?.track(level, "zombie_killed", {
                 zombie_id: zombie.id,
-                zombie_health_remaining: zombie.health,
-                was_multiplied: pea.wasMultiplied
+                time_alive_seconds: Number((zombie.aliveMs / 1000).toFixed(2)),
+                killed_by_multiplied_pea: pea.wasMultiplied,
+                zombie_kind: zombie.kind
               });
 
-              if (zombie.health <= 0) {
-                rt.killed += 1;
-                setZombiesKilled(rt.killed);
-                setZombiesRemaining(LEVEL_CONFIG[level].zombies - rt.killed);
+              if (zombie.kind === "catalyst") {
+                const nextKills = catalystKills + 1;
+                setCatalystKills(nextKills);
 
-                eventClientRef.current?.track(level, "zombie_killed", {
-                  zombie_id: zombie.id,
-                  time_alive_seconds: Number((zombie.aliveMs / 1000).toFixed(2)),
-                  killed_by_multiplied_pea: pea.wasMultiplied
-                });
+                let nextUnlocked = [...unlockedPlants];
+                let message: string | null = null;
+
+                if (nextKills === 1 && !nextUnlocked.includes("double")) {
+                  nextUnlocked.push("double");
+                  message = "Catalyst dropped upgrade: Double Shooter unlocked!";
+                } else if (nextKills === 2 && !nextUnlocked.includes("triple")) {
+                  nextUnlocked.push("triple");
+                  message = "Catalyst dropped upgrade: Triple Shooter unlocked!";
+                }
+
+                if (message) {
+                  setUnlockNotice(message);
+                  setUnlockedPlants(nextUnlocked);
+                  persistUnlocks(nextUnlocked, nextKills);
+                } else {
+                  persistUnlocks(unlockedPlants, nextKills);
+                }
               }
-              break;
             }
+
+            break;
           }
 
-          if (!consumed) {
-            alivePeas.push(pea);
-          }
+          if (!consumed) alivePeas.push(pea);
         }
 
         rt.peas = alivePeas;
-        rt.zombies = aliveZombies.filter((z) => z.health > 0);
+        rt.zombies = aliveZombies.filter((zombie) => zombie.health > 0);
         rt.sparkles = updateSparkles(rt.sparkles, deltaSec);
 
-        if (!rt.levelFailed && rt.killed >= LEVEL_CONFIG[level].zombies) {
-          setStatus(level === 3 ? "finished" : "won");
+        if (!rt.levelFailed && rt.killed >= levelCfg.zombies) {
+          const levelFinished = level >= LEVEL_COUNT;
+          setStatus(levelFinished ? "finished" : "won");
+
           const duration = (performance.now() - rt.startedAt) / 1000;
           const accuracy = rt.peasFired ? (rt.hits / rt.peasFired) * 100 : 0;
 
@@ -382,12 +585,8 @@ export function GameCanvas() {
             duration_seconds: Number(duration.toFixed(2)),
             peas_fired: rt.peasFired,
             accuracy_percent: Number(accuracy.toFixed(2)),
-            laser_status:
-              LEVEL_CONFIG[level].multiplier === null
-                ? "not_present"
-                : rt.laserActive
-                  ? "intact"
-                  : "destroyed"
+            laser_status: levelCfg.multiplier === null ? "not_present" : rt.laserActive ? "intact" : "destroyed",
+            score: rt.killed * 125 + (rt.laserActive && levelCfg.multiplier !== null ? 200 : 0)
           });
         }
       } else {
@@ -395,7 +594,7 @@ export function GameCanvas() {
       }
 
       ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-      drawScene(ctx, runtimeRef.current, level, ts);
+      drawScene(ctx, runtimeRef.current, level, ts, activePlant, imagesRef.current);
 
       rafRef.current = requestAnimationFrame(loop);
     };
@@ -403,11 +602,9 @@ export function GameCanvas() {
     rafRef.current = requestAnimationFrame(loop);
 
     return () => {
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current);
-      }
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [level, status, levelCfg]);
+  }, [activePlant, catalystKills, level, levelCfg, status, unlockedPlants]);
 
   return (
     <section className="panel">
@@ -418,6 +615,12 @@ export function GameCanvas() {
         <div className="score-display">🌻 Score: <span className="score-number">{score.toLocaleString()}</span></div>
         <div className="level-indicator">Level <span className="level-number">{level}</span></div>
         <div className="zombies-remaining">🧟 Left: <span className="zombie-count">{zombiesRemaining}</span></div>
+      </div>
+
+      <div className="hud" style={{ marginBottom: 8 }}>
+        <span>Plant: {getPlantLabel(activePlant)}</span>
+        <span>Unlocked: {unlockedPlants.map(getPlantLabel).join(", ")}</span>
+        <span>Catalyst kills: {catalystKills}</span>
       </div>
 
       <div className="gameFrameWrap">
@@ -438,15 +641,85 @@ export function GameCanvas() {
               </div>
             </div>
           )}
+
+          {plantModalLevel !== null && (
+            <div className="modal-overlay">
+              <div className="level-complete-modal" style={{ width: "min(92%, 760px)" }}>
+                <h2 className="level-complete-title" style={{ fontSize: "clamp(28px,6vw,44px)" }}>
+                  Select Plant
+                </h2>
+                <p className="text-[16px] md:text-[17px]">Choose active plant for Level {plantModalLevel}. Default keeps previous plant.</p>
+
+                <div className="mt-4 flex w-full items-stretch justify-start gap-3 overflow-x-auto pb-2">
+                  {unlockedPlants.map((plant) => (
+                    <div
+                      key={plant}
+                      className={"flex min-w-[140px] flex-col items-center gap-2 rounded-2xl border-2 p-2 " +
+                        (plantSelectionForModal === plant
+                          ? "border-[#1f6f31] bg-white/25 ring-2 ring-[#37b24d]/50"
+                          : "border-white/40 bg-white/10")}
+                      style={{
+                        backgroundColor: plantSelectionForModal === plant
+                          ? undefined
+                          : plant === "basic"
+                            ? "#ecfdf5"
+                            : plant === "double"
+                              ? "#eff6ff"
+                              : "#f5f3ff",
+                        borderColor: plantSelectionForModal === plant
+                          ? undefined
+                          : plant === "basic"
+                            ? "#34d399"
+                            : plant === "double"
+                              ? "#60a5fa"
+                              : "#a78bfa"
+                      }}
+                    >
+                      <img
+                        src={getPlantSpritePath(plant)}
+                        alt={getPlantLabel(plant)}
+                        className="h-14 w-16 object-contain drop-shadow-[0_3px_4px_rgba(0,0,0,0.25)]"
+                        loading="lazy"
+                      />
+                      <button
+                        className={(plantSelectionForModal === plant ? "btn-primary" : "btn-game") + " px-4 py-2 text-[13px] md:text-[14px]"}
+                        onClick={() => setPlantSelectionForModal(plant)}
+                      >
+                        {getPlantLabel(plant)}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="actions" style={{ marginTop: 14 }}>
+                  <button className="btn-primary" onClick={() => startLevel(plantModalLevel, plantSelectionForModal)}>
+                    Start Level {plantModalLevel}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {unlockNotice && (
+            <div className="modal-overlay" onClick={() => setUnlockNotice(null)}>
+              <div className="level-complete-modal">
+                <h2 className="level-complete-title" style={{ fontSize: "clamp(26px,5vw,40px)" }}>
+                  Upgrade Unlocked
+                </h2>
+                <p>{unlockNotice}</p>
+                <div className="actions">
+                  <button className="btn-primary" onClick={() => setUnlockNotice(null)}>Continue</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {LEVEL_CONFIG[level].multiplier !== null && (
         <div className="laser-status">
           <span className="laser-icon">⚡</span>
-          <span className="laser-multiplier">
-            {`x${LEVEL_CONFIG[level].multiplier}`}
-          </span>
+          <span className="laser-multiplier">{`x${LEVEL_CONFIG[level].multiplier}`}</span>
           <span>SHIELD {laserActive ? "ACTIVE" : "BROKEN"}</span>
         </div>
       )}
@@ -461,22 +734,119 @@ export function GameCanvas() {
       </div>
 
       <div className="actions">
-        <button className="btn-primary" onClick={() => startLevel(level)}>
-          Start / Restart Level {level}
-        </button>
-        {status === "won" && level < 3 ? (
-          <button className="btn-primary" onClick={() => startLevel((level + 1) as LevelNumber)}>
-            Next Level
-          </button>
+        <button className="btn-game" onClick={() => queueLevelStart(level)}>Start / Restart Level {level}</button>
+        {status === "won" && level < LEVEL_COUNT ? (
+          <button className="btn-game" onClick={() => queueLevelStart(level + 1)}>Next Level</button>
         ) : null}
         {(status === "finished" || status === "lost") && (
-          <button className="btn-danger" onClick={() => startLevel(1)}>
-            Play From Level 1
-          </button>
+          <button className="btn-danger" onClick={() => queueLevelStart(1)}>Play From Level 1</button>
         )}
       </div>
     </section>
   );
+}
+
+function spawnPea(
+  runtime: {
+    peas: Pea[];
+    nextPeaId: number;
+    peasFired: number;
+  },
+  x: number,
+  y: number,
+  wasMultiplied: boolean,
+  speedFactor: number,
+  level: number,
+  eventClient: EventClient | null
+): void {
+  runtime.peas.push({
+    id: runtime.nextPeaId++,
+    x: Math.max(GAME_CONFIG.pea.radius, Math.min(CANVAS_W - GAME_CONFIG.pea.radius, x)),
+    y,
+    wasMultiplied,
+    hasCrossedLaser: wasMultiplied,
+    speedFactor
+  });
+  runtime.peasFired += 1;
+
+  if (runtime.peas.length > MAX_ACTIVE_PEAS) {
+    runtime.peas.splice(0, runtime.peas.length - MAX_ACTIVE_PEAS);
+  }
+
+  eventClient?.track(level, "pea_fired", {
+    cart_x: Math.round(x),
+    laser_aligned: Math.abs(x - CANVAS_W / 2) < 110
+  });
+}
+
+function createZombie(kind: ZombieKind, id: number, baseSpeed: number): Zombie {
+  const stats = getZombieStats(kind, baseSpeed);
+  return {
+    id,
+    kind,
+    x: 0,
+    y: 0,
+    health: stats.health,
+    maxHealth: stats.health,
+    speed: stats.speed,
+    aliveMs: 0,
+    bucketBroken: false
+  };
+}
+
+function getZombieStats(kind: ZombieKind, baseSpeed: number): { health: number; speed: number } {
+  if (kind === "ironhead") return { health: 5, speed: baseSpeed };
+  if (kind === "drdecay") return { health: 3, speed: baseSpeed * 1.5 };
+  if (kind === "shambler") return { health: 10, speed: baseSpeed * 0.45 };
+  if (kind === "catalyst") return { health: 3, speed: baseSpeed };
+  return { health: 3, speed: baseSpeed };
+}
+
+function getZombieWidth(kind: ZombieKind): number {
+  return GAME_CONFIG.zombie.width * 4;
+}
+
+function getZombieHeight(kind: ZombieKind): number {
+  return GAME_CONFIG.zombie.height * 3;
+}
+
+function pickZombieKind(
+  level: number,
+  spawnIndex: number,
+  total: number,
+  flags: { catalystSpawned: boolean; shamblerSpawned: boolean }
+): ZombieKind {
+  const inFinalFive = spawnIndex >= Math.max(0, total - 5);
+
+  if (level === LEVEL_COUNT && inFinalFive && !flags.shamblerSpawned) {
+    if (spawnIndex === total - 1 || Math.random() < 0.35) {
+      return "shambler";
+    }
+  }
+
+  if (FIBONACCI_LEVELS.includes(level as (typeof FIBONACCI_LEVELS)[number]) && !flags.catalystSpawned) {
+    if (spawnIndex === Math.floor(total * 0.6)) {
+      return "catalyst";
+    }
+  }
+
+  if (level <= 2) {
+    const earlyRoster: ZombieKind[] = ["rotter", "rotter", "ironhead"];
+    return earlyRoster[spawnIndex % earlyRoster.length];
+  }
+
+  if (level <= 6) {
+    const midRoster: ZombieKind[] = ["rotter", "ironhead", "drdecay", "rotter"];
+    return midRoster[spawnIndex % midRoster.length];
+  }
+
+  if (level <= 12) {
+    const advancedRoster: ZombieKind[] = ["rotter", "ironhead", "drdecay", "catalyst"];
+    return advancedRoster[spawnIndex % advancedRoster.length];
+  }
+
+  const lateRoster: ZombieKind[] = ["rotter", "ironhead", "drdecay", "catalyst", "drdecay"];
+  return lateRoster[spawnIndex % lateRoster.length];
 }
 
 function drawScene(
@@ -488,8 +858,10 @@ function drawScene(
     sparkles: Sparkle[];
     laserActive: boolean;
   },
-  level: LevelNumber,
-  ts: number
+  level: number,
+  ts: number,
+  activePlant: PlantType,
+  images: Record<string, HTMLImageElement>
 ): void {
   const skyToLawn = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
   skyToLawn.addColorStop(0, "#56b4ef");
@@ -503,7 +875,7 @@ function drawScene(
   drawLaserGate(ctx, level, runtime.laserActive, ts);
 
   const cartCenter = projectPoint(runtime.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY + GAME_CONFIG.cart.height / 2);
-  drawPlantCart(ctx, cartCenter.x, cartCenter.y, cartCenter.scale);
+  drawPlant(ctx, cartCenter.x, cartCenter.y, cartCenter.scale, activePlant, images);
 
   for (const pea of runtime.peas) {
     const p = projectPoint(pea.x, pea.y);
@@ -554,26 +926,81 @@ function drawScene(
   }
 
   for (const zombie of runtime.zombies) {
-    const p = projectPoint(zombie.x + GAME_CONFIG.zombie.width / 2, zombie.y + GAME_CONFIG.zombie.height / 2);
-    const zw = Math.max(14, GAME_CONFIG.zombie.width * p.scale * 0.6);
-    const zh = Math.max(20, GAME_CONFIG.zombie.height * p.scale * 0.62);
+    const p = projectPoint(zombie.x + getZombieWidth(zombie.kind) / 2, zombie.y + getZombieHeight(zombie.kind) / 2);
+    const zw = Math.max(18, getZombieWidth(zombie.kind) * p.scale * 0.6);
+    const zh = Math.max(24, getZombieHeight(zombie.kind) * p.scale * 0.62);
 
-    const zombieGrad = ctx.createLinearGradient(p.x - zw / 2, p.y - zh / 2, p.x + zw / 2, p.y + zh / 2);
-    zombieGrad.addColorStop(0, "#a8d884");
-    zombieGrad.addColorStop(1, "#7fa35c");
-    ctx.fillStyle = zombieGrad;
-    ctx.fillRect(p.x - zw / 2, p.y - zh / 2, zw, zh);
-    ctx.strokeStyle = "#4a7c2c";
-    ctx.lineWidth = Math.max(1, p.scale * 1.8);
-    ctx.strokeRect(p.x - zw / 2, p.y - zh / 2, zw, zh);
+    drawZombie(ctx, p.x, p.y, zw, zh, zombie, images);
 
-    const barW = 26 * p.scale;
-    const hpRatio = Math.max(0, zombie.health / GAME_CONFIG.zombie.health);
+    const barW = Math.max(34 * p.scale, zw * 0.42);
+    const hpRatio = Math.max(0, zombie.health / zombie.maxHealth);
     ctx.fillStyle = "rgba(17,17,17,0.9)";
-    ctx.fillRect(p.x - barW / 2, p.y - zh / 2 - 9 * p.scale, barW, 4 * p.scale);
-    ctx.fillStyle = "#22c55e";
-    ctx.fillRect(p.x - barW / 2, p.y - zh / 2 - 9 * p.scale, barW * hpRatio, 4 * p.scale);
+    ctx.fillRect(p.x - barW / 2, p.y - zh / 2 - 11 * p.scale, barW, 5 * p.scale);
+    ctx.fillStyle = hpRatio > 0.6 ? "#22c55e" : hpRatio > 0.3 ? "#f59e0b" : "#ef4444";
+    ctx.fillRect(p.x - barW / 2, p.y - zh / 2 - 11 * p.scale, barW * hpRatio, 5 * p.scale);
   }
+}
+
+function drawPlant(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  scale: number,
+  plant: PlantType,
+  images: Record<string, HTMLImageElement>
+): void {
+  const w = Math.max(44, GAME_CONFIG.cart.width * scale * 1.1);
+  const h = Math.max(48, GAME_CONFIG.cart.height * scale * 2.8);
+
+  const key = plant === "double" ? "plantDouble" : plant === "triple" ? "plantTriple" : "plantBasic";
+  const img = images[key];
+
+  if (img && img.complete) {
+    ctx.drawImage(img, x - w / 2, y - h / 2, w, h);
+    return;
+  }
+
+  const grad = ctx.createLinearGradient(x - w / 2, y - h / 2, x + w / 2, y + h / 2);
+  grad.addColorStop(0, "#8b4513");
+  grad.addColorStop(1, "#6f3609");
+  ctx.fillStyle = grad;
+  ctx.fillRect(x - w / 2, y - h / 2, w, h);
+  ctx.strokeStyle = "#4e2a0b";
+  ctx.lineWidth = Math.max(1, scale * 1.5);
+  ctx.strokeRect(x - w / 2, y - h / 2, w, h);
+}
+
+function drawZombie(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  zombie: Zombie,
+  images: Record<string, HTMLImageElement>
+): void {
+  const keyMap: Record<ZombieKind, string> = {
+    rotter: "zombieRotter",
+    ironhead: "zombieIronhead",
+    drdecay: "zombieDrdecay",
+    shambler: "zombieShambler",
+    catalyst: "zombieCatalyst"
+  };
+
+  const img = images[keyMap[zombie.kind]];
+  if (img && img.complete) {
+    ctx.drawImage(img, x - w / 2, y - h / 2, w, h);
+    return;
+  }
+
+  const zombieGrad = ctx.createLinearGradient(x - w / 2, y - h / 2, x + w / 2, y + h / 2);
+  zombieGrad.addColorStop(0, zombie.kind === "drdecay" ? "#8bd0ff" : zombie.kind === "catalyst" ? "#ffe066" : "#a8d884");
+  zombieGrad.addColorStop(1, zombie.kind === "drdecay" ? "#4dabf7" : zombie.kind === "catalyst" ? "#faa307" : "#7fa35c");
+  ctx.fillStyle = zombieGrad;
+  ctx.fillRect(x - w / 2, y - h / 2, w, h);
+  ctx.strokeStyle = "#4a7c2c";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x - w / 2, y - h / 2, w, h);
 }
 
 function drawArenaBase(ctx: CanvasRenderingContext2D): void {
@@ -637,10 +1064,15 @@ function drawLaneGuides(ctx: CanvasRenderingContext2D): void {
 
 function drawLaserGate(
   ctx: CanvasRenderingContext2D,
-  level: LevelNumber,
+  level: number,
   active: boolean,
   ts: number
 ): void {
+  const multiplier = LEVEL_CONFIG[level].multiplier;
+  if (multiplier === null) {
+    return;
+  }
+
   const laserYTop = GAME_CONFIG.laser.y;
   const laserYBottom = GAME_CONFIG.laser.y + GAME_CONFIG.laser.height;
   const lt = projectPoint(0, laserYTop);
@@ -672,7 +1104,6 @@ function drawLaserGate(
   ctx.fillRect(lt.x - 6, lt.y - 10, 6, 28);
   ctx.fillRect(rt.x, rt.y - 10, 6, 28);
 
-  const multiplier = LEVEL_CONFIG[level].multiplier ?? 1;
   ctx.font = "700 34px Fredoka";
   ctx.textAlign = "center";
   ctx.fillStyle = "#fff";
@@ -686,19 +1117,6 @@ function drawLaserGate(
   ctx.textAlign = "start";
 }
 
-function drawPlantCart(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number): void {
-  const w = Math.max(22, GAME_CONFIG.cart.width * scale * 0.55);
-  const h = Math.max(12, GAME_CONFIG.cart.height * scale * 0.7);
-  const grad = ctx.createLinearGradient(x - w / 2, y - h / 2, x + w / 2, y + h / 2);
-  grad.addColorStop(0, "#8b4513");
-  grad.addColorStop(1, "#6f3609");
-  ctx.fillStyle = grad;
-  ctx.fillRect(x - w / 2, y - h / 2, w, h);
-  ctx.strokeStyle = "#4e2a0b";
-  ctx.lineWidth = Math.max(1, scale * 1.5);
-  ctx.strokeRect(x - w / 2, y - h / 2, w, h);
-}
-
 function projectPoint(worldX: number, worldY: number): { x: number; y: number; scale: number } {
   const t = Math.max(0, Math.min(1, worldY / CANVAS_H));
   const widthAtY = ARENA_TOP_WIDTH + (ARENA_BOTTOM_WIDTH - ARENA_TOP_WIDTH) * t;
@@ -707,22 +1125,6 @@ function projectPoint(worldX: number, worldY: number): { x: number; y: number; s
   const y = ARENA_TOP_Y + t * (ARENA_BOTTOM_Y - ARENA_TOP_Y);
   const scale = 0.48 + t * 0.72;
   return { x, y, scale };
-}
-
-function getCloneOffsets(multiplier: number): number[] {
-  if (multiplier === 5) {
-    return [-8, -4, 0, 4, 8];
-  }
-  if (multiplier === 2) {
-    return [-3, 3];
-  }
-
-  const offsets: number[] = [];
-  const mid = (multiplier - 1) / 2;
-  for (let i = 0; i < multiplier; i += 1) {
-    offsets.push((i - mid) * 4);
-  }
-  return offsets;
 }
 
 function createSparkles(x: number, y: number): Sparkle[] {
