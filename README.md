@@ -1,4 +1,4 @@
-# Laser Garden Arena
+# The Undead Arena
 
 Event-driven mini game prototype for Snowflake Buildathon 2026.
 

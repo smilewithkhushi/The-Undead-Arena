@@ -86,6 +86,7 @@ export function GameCanvas() {
   const [level, setLevel] = useState<LevelNumber>(1);
   const [status, setStatus] = useState<GameStatus>("idle");
   const [laserActive, setLaserActive] = useState<boolean>(true);
+  const [shieldCooldownUntilLevel, setShieldCooldownUntilLevel] = useState<number>(0);
   const [zombiesKilled, setZombiesKilled] = useState<number>(0);
   const [zombiesRemaining, setZombiesRemaining] = useState<number>(LEVEL_CONFIG[1].zombies);
 
@@ -117,6 +118,7 @@ export function GameCanvas() {
     levelFailed: false,
     laserDestroyedAtWave: null as number | null,
     laserActive: true,
+    shieldEnabled: true,
     previousCartX: CANVAS_W / 2 - GAME_CONFIG.cart.width / 2,
     panicMeter: 0,
     threatDetectedAt: null as number | null,
@@ -126,6 +128,8 @@ export function GameCanvas() {
   });
 
   const levelCfg = useMemo(() => LEVEL_CONFIG[level], [level]);
+  const shieldConfigured = LEVEL_CONFIG[level].multiplier !== null;
+  const shieldOnCooldown = shieldConfigured && level < shieldCooldownUntilLevel;
   const score = zombiesKilled * 125 + (laserActive && LEVEL_CONFIG[level].multiplier ? 200 : 0);
 
   useEffect(() => {
@@ -152,7 +156,7 @@ export function GameCanvas() {
         setCatalystKills(parsedKills);
       }
     }
-  }, []);
+  }, [shieldCooldownUntilLevel]);
 
   useEffect(() => {
     const map: Record<string, HTMLImageElement> = {};
@@ -162,7 +166,7 @@ export function GameCanvas() {
       map[key] = img;
     }
     imagesRef.current = map;
-  }, []);
+  }, [shieldCooldownUntilLevel]);
 
   const persistUnlocks = (plants: PlantType[], kills: number) => {
     window.localStorage.setItem(UNLOCK_STORAGE_KEY, JSON.stringify(plants));
@@ -180,10 +184,12 @@ export function GameCanvas() {
   };
 
   const startLevel = useCallback((levelNumber: LevelNumber, plant: PlantType) => {
+    const shieldAvailableThisLevel = LEVEL_CONFIG[levelNumber].multiplier !== null && levelNumber >= shieldCooldownUntilLevel;
+
     setLevel(levelNumber);
     setStatus("running");
     setActivePlant(plant);
-    setLaserActive(LEVEL_CONFIG[levelNumber].multiplier !== null);
+    setLaserActive(shieldAvailableThisLevel);
     setZombiesKilled(0);
     setZombiesRemaining(LEVEL_CONFIG[levelNumber].zombies);
     setPlantModalLevel(null);
@@ -211,7 +217,8 @@ export function GameCanvas() {
       lastFrameTs: performance.now(),
       levelFailed: false,
       laserDestroyedAtWave: null,
-      laserActive: LEVEL_CONFIG[levelNumber].multiplier !== null,
+      laserActive: shieldAvailableThisLevel,
+      shieldEnabled: shieldAvailableThisLevel,
       previousCartX: CANVAS_W / 2 - GAME_CONFIG.cart.width / 2,
       panicMeter: 0,
       threatDetectedAt: null,
@@ -224,7 +231,7 @@ export function GameCanvas() {
       level: levelNumber,
       active_plant: plant
     });
-  }, []);
+  }, [shieldCooldownUntilLevel]);
 
   useEffect(() => {
     const client = new EventClient();
@@ -402,7 +409,7 @@ export function GameCanvas() {
 
           const zombie = createZombie(kind, rt.nextZombieId++, levelCfg.speed);
           zombie.x = Math.random() * (CANVAS_W - getZombieWidth(kind));
-          zombie.y = Math.max(0, GAME_CONFIG.zombie.spawnY);
+          zombie.y = GAME_CONFIG.zombie.spawnY - getZombieHeight(kind);
           rt.zombies.push(zombie);
           rt.spawned += 1;
         }
@@ -471,6 +478,7 @@ export function GameCanvas() {
               rt.laserDestroyedAtWave = progress;
 
               if (multiplier !== null) {
+                setShieldCooldownUntilLevel((prev) => Math.max(prev, level + 5));
                 eventClientRef.current?.track(level, "laser_destroyed", {
                   zombie_id: zombie.id,
                   multiplier_lost: multiplier,
@@ -504,6 +512,8 @@ export function GameCanvas() {
         for (const pea of rt.peas) {
           let consumed = false;
           for (const zombie of aliveZombies) {
+            if (zombie.y < GAME_CONFIG.zombie.spawnY) continue;
+
             const hitZombie = circleHitsRect(
               pea.x,
               pea.y,
@@ -607,23 +617,21 @@ export function GameCanvas() {
   }, [activePlant, catalystKills, level, levelCfg, status, unlockedPlants]);
 
   return (
-    <section className="panel">
-      <h1 className="game-title">Plants vs Zombies Arena</h1>
+    <section className="panel max-w-[1600px]">
+      <h1 className="game-title">The Undead Arena</h1>
       <p className="muted">Shoot zombies and protect your base from being infected!</p>
 
-      <div className="hud-top">
-        <div className="score-display">🌻 Score: <span className="score-number">{score.toLocaleString()}</span></div>
-        <div className="level-indicator">Level <span className="level-number">{level}</span></div>
-        <div className="zombies-remaining">🧟 Left: <span className="zombie-count">{zombiesRemaining}</span></div>
-      </div>
+      <div className="arena-layout">
+        <div className="arena-side">
+          <div className="wood-card"><span className="wood-label">🌻 Score</span><span className="wood-value">{score.toLocaleString()}</span></div>
+          <div className="wood-card"><span className="wood-label">Level</span><span className="wood-value">{level}</span></div>
+          <div className="wood-card"><span className="wood-label">🧟 Left</span><span className="wood-value">{zombiesRemaining}</span></div>
+          <div className="wood-card"><span className="wood-label">Plant</span><span className="wood-value">{getPlantLabel(activePlant)}</span></div>
+          <div className="wood-card"><span className="wood-label">Unlocked</span><div className="unlocked-icons">{unlockedPlants.map((plant) => (<div key={plant} className="unlocked-mini-card"><img src={getPlantSpritePath(plant)} alt={getPlantLabel(plant)} className="unlocked-mini-image" loading="lazy" /></div>))}</div></div>
+          <div className="wood-card"><span className="wood-label">Catalyst Kills</span><span className="wood-value">{catalystKills}</span></div>
+        </div>
 
-      <div className="hud" style={{ marginBottom: 8 }}>
-        <span>Plant: {getPlantLabel(activePlant)}</span>
-        <span>Unlocked: {unlockedPlants.map(getPlantLabel).join(", ")}</span>
-        <span>Catalyst kills: {catalystKills}</span>
-      </div>
-
-      <div className="gameFrameWrap">
+        <div className="gameFrameWrap">
         <div className="gameFrame">
           <canvas ref={canvasRef} width={CANVAS_W} height={CANVAS_H} className="gameCanvas" />
 
@@ -714,9 +722,10 @@ export function GameCanvas() {
             </div>
           )}
         </div>
+        </div>
       </div>
 
-      {LEVEL_CONFIG[level].multiplier !== null && (
+      {shieldConfigured && !shieldOnCooldown && (
         <div className="laser-status">
           <span className="laser-icon">⚡</span>
           <span className="laser-multiplier">{`x${LEVEL_CONFIG[level].multiplier}`}</span>
@@ -724,12 +733,23 @@ export function GameCanvas() {
         </div>
       )}
 
+      {shieldConfigured && shieldOnCooldown && (
+        <div className="laser-status">
+          <span className="laser-icon">⏳</span>
+          <span>SHIELD COOLDOWN</span>
+          <span>{`RETURNS L${shieldCooldownUntilLevel}`}</span>
+        </div>
+      )}
+
       <div className="hud">
         <span>Status: {status}</span>
         <span>Killed: {zombiesKilled}</span>
         <span>Remaining: {zombiesRemaining}</span>
-        {LEVEL_CONFIG[level].multiplier !== null && (
+        {shieldConfigured && !shieldOnCooldown && (
           <span>Shield: {laserActive ? "Intact" : "Destroyed"}</span>
+        )}
+        {shieldConfigured && shieldOnCooldown && (
+          <span>{`Shield: Cooldown (returns L${shieldCooldownUntilLevel})`}</span>
         )}
       </div>
 
@@ -818,10 +838,8 @@ function pickZombieKind(
 ): ZombieKind {
   const inFinalFive = spawnIndex >= Math.max(0, total - 5);
 
-  if (level === LEVEL_COUNT && inFinalFive && !flags.shamblerSpawned) {
-    if (spawnIndex === total - 1 || Math.random() < 0.35) {
-      return "shambler";
-    }
+  if (level % 4 === 0 && inFinalFive && !flags.shamblerSpawned) {
+    return "shambler";
   }
 
   if (FIBONACCI_LEVELS.includes(level as (typeof FIBONACCI_LEVELS)[number]) && !flags.catalystSpawned) {
@@ -857,6 +875,7 @@ function drawScene(
     zombies: Zombie[];
     sparkles: Sparkle[];
     laserActive: boolean;
+    shieldEnabled: boolean;
   },
   level: number,
   ts: number,
@@ -872,7 +891,9 @@ function drawScene(
 
   drawArenaBase(ctx);
   drawLaneGuides(ctx);
-  drawLaserGate(ctx, level, runtime.laserActive, ts);
+  if (runtime.shieldEnabled) {
+    drawLaserGate(ctx, level, runtime.laserActive, ts);
+  }
 
   const cartCenter = projectPoint(runtime.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY + GAME_CONFIG.cart.height / 2);
   drawPlant(ctx, cartCenter.x, cartCenter.y, cartCenter.scale, activePlant, images);

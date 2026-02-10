@@ -175,7 +175,7 @@ export function AnalyticsDashboard() {
 
   return (
     <section className="panel max-w-[980px]">
-      <h1 className="game-title">Plants vs Zombies Arena</h1>
+      <h1 className="game-title">The Undead Arena</h1>
       <h2 className="text-center text-3xl font-fredoka font-bold text-text-stroke">Analytics Dashboard</h2>
       <p className="my-2 mb-2.5 text-center font-semibold text-[#1f3b10]">The Game Analytics refresh every 4 seconds.</p>
 

@@ -137,3 +137,45 @@
     text-shadow: 0 0 10px #e056fd;
   }
 }
+
+@layer components {
+  .arena-layout {
+    @apply my-2 grid w-full gap-4 xl:grid-cols-[1fr_290px] xl:items-start;
+  }
+
+  .arena-side {
+    @apply order-2 grid gap-3 xl:order-2;
+  }
+
+  .wood-card {
+    @apply rounded-2xl border-[3px] border-[#5c341b] px-4 py-3 text-white shadow-[0_6px_0_#4a2b16,0_10px_16px_rgba(0,0,0,0.28)];
+    background: linear-gradient(180deg, #a96d3f 0%, #8b4f28 100%);
+  }
+
+  .wood-label {
+    @apply block font-fredoka text-[14px] uppercase tracking-wide text-[#ffe6bf] opacity-95;
+  }
+
+  .wood-value {
+    @apply block font-fredoka text-[20px] font-bold leading-tight;
+    text-shadow:
+      -1px -1px 0 #2c3e50,
+       1px -1px 0 #2c3e50,
+      -1px  1px 0 #2c3e50,
+       1px  1px 0 #2c3e50;
+  }
+}
+
+@layer components {
+  .unlocked-icons {
+    @apply mt-2 flex flex-wrap gap-2;
+  }
+
+  .unlocked-mini-card {
+    @apply grid h-10 w-10 place-items-center rounded-lg border border-[#f6d9b7] bg-[rgba(255,255,255,0.22)] shadow-[0_2px_6px_rgba(0,0,0,0.25)];
+  }
+
+  .unlocked-mini-image {
+    @apply h-7 w-7 object-contain;
+  }
+}

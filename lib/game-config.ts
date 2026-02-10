@@ -46,11 +46,9 @@ export const LEVEL_CONFIG: Record<number, LevelConfig> = Object.fromEntries(
     const multiplier =
       level === 1
         ? null
-        : level <= 7
+        : level <= 10
           ? 2
-          : level <= 14
-            ? 5
-            : 10;
+          : 3;
 
     return [
       level,

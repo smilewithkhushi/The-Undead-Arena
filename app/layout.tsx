@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Laser Garden Arena",
+  title: "The Undead Arena",
   description: "Event-driven tower defense prototype for Snowflake Buildathon 2026"
 };
 
