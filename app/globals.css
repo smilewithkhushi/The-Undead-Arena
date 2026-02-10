@@ -1,0 +1,320 @@
+@import url('https://fonts.googleapis.com/css2?family=Chewy&family=Fredoka:wght@400;600;700&display=swap');
+
+:root {
+  --lawn-green: #7ec850;
+  --dark-green: #4a7c2c;
+  --zombie-skin: #a8d884;
+  --pea-green: #8fd14f;
+  --bright-yellow: #ffd93d;
+  --orange-pea: #ff9234;
+  --danger-red: #e74c3c;
+  --sky-blue: #87ceeb;
+  --background-grass: linear-gradient(180deg, #6bb642 0%, #5a9c35 100%);
+  --cart-brown: #8b4513;
+  --laser-purple: #9b59b6;
+  --laser-glow: #e056fd;
+  --text-white: #ffffff;
+  --text-stroke: #2c3e50;
+  --score-yellow: #fff176;
+  --panel: rgba(255, 255, 255, 0.9);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Fredoka", "Segoe UI", sans-serif;
+  color: var(--text-stroke);
+  background:
+    radial-gradient(circle at 20% 10%, rgba(255, 255, 255, 0.35), transparent 35%),
+    radial-gradient(circle at 80% 15%, rgba(255, 255, 255, 0.2), transparent 30%),
+    linear-gradient(180deg, #87ceeb 0%, #7ec850 40%, #6bb642 100%);
+  min-height: 100vh;
+}
+
+.page {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 3px solid #5d4037;
+  border-radius: 18px;
+  padding: 14px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
+}
+
+.game-title {
+  margin: 0;
+  font-family: "Chewy", cursive;
+  font-size: clamp(34px, 5vw, 48px);
+  color: var(--text-white);
+  letter-spacing: 2px;
+  text-align: center;
+  text-shadow:
+    -3px -3px 0 var(--text-stroke),
+    3px -3px 0 var(--text-stroke),
+    -3px 3px 0 var(--text-stroke),
+    3px 3px 0 var(--text-stroke);
+}
+
+.muted {
+  margin: 8px 0 10px;
+  text-align: center;
+  font-weight: 600;
+  color: #1f3b10;
+}
+
+.hud-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.score-display,
+.level-indicator,
+.zombies-remaining {
+  font-size: clamp(14px, 2.4vw, 20px);
+  font-weight: 700;
+  color: var(--score-yellow);
+  background: rgba(139, 69, 19, 0.92);
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 3px solid #5d4037;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.35);
+}
+
+.level-indicator {
+  color: #ffffff;
+  background: linear-gradient(180deg, #27ae60 0%, #1e8449 100%);
+  border-color: #145a32;
+}
+
+.gameFrameWrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  padding: 6px 0;
+}
+
+.gameFrame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  width: min(100%, 1200px);
+  border: 4px solid #355e1f;
+  border-radius: 22px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, #87ceeb 0%, #7ec850 42%, #6bb642 100%),
+    repeating-linear-gradient(0deg, #7ec850 0px, #6bb642 10px, #5a9c35 20px);
+  box-shadow:
+    0 0 0 4px rgba(255, 255, 255, 0.2) inset,
+    0 20px 45px rgba(0, 0, 0, 0.28);
+}
+
+.gameCanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: transparent;
+}
+
+.laser-status {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+  border: 3px solid #6c3483;
+  border-radius: 20px;
+  padding: 8px 14px;
+  color: #fff;
+  box-shadow: 0 0 20px rgba(155, 89, 182, 0.45);
+}
+
+.laser-multiplier {
+  font-family: "Chewy", cursive;
+  font-size: 28px;
+  text-shadow: 0 0 10px var(--laser-glow);
+}
+
+.hud {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  font-weight: 600;
+}
+
+.hud span {
+  background: rgba(255, 255, 255, 0.72);
+  border: 2px solid #59873f;
+  border-radius: 12px;
+  padding: 8px;
+  text-align: center;
+}
+
+.actions {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+button,
+.linkBtn {
+  display: inline-block;
+  font-family: "Fredoka", sans-serif;
+  font-size: clamp(16px, 2.4vw, 24px);
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(180deg, #ffd93d 0%, #ffa500 100%);
+  border: 4px solid #ff8c00;
+  border-radius: 16px;
+  padding: 10px 22px;
+  box-shadow:
+    0 6px 0 #cc7000,
+    0 8px 12px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: transform 0.1s ease;
+  text-decoration: none;
+}
+
+button:hover,
+.linkBtn:hover {
+  transform: translateY(-2px);
+}
+
+button:active,
+.linkBtn:active {
+  transform: translateY(4px);
+  box-shadow:
+    0 2px 0 #cc7000,
+    0 4px 8px rgba(0, 0, 0, 0.25);
+}
+
+.btn-danger {
+  background: linear-gradient(180deg, #e74c3c 0%, #c0392b 100%);
+  border-color: #a93226;
+  box-shadow:
+    0 6px 0 #7b241c,
+    0 8px 12px rgba(0, 0, 0, 0.3);
+}
+
+.modal-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  z-index: 10;
+}
+
+.level-complete-modal {
+  width: min(70%, 360px);
+  text-align: center;
+  background: linear-gradient(135deg, #ffd93d 0%, #ffa500 100%);
+  border: 6px solid #ff8c00;
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow:
+    0 12px 0 #cc7000,
+    0 16px 32px rgba(0, 0, 0, 0.45);
+}
+
+.level-complete-title {
+  margin: 0 0 8px;
+  font-family: "Chewy", cursive;
+  font-size: clamp(34px, 6vw, 56px);
+  color: #ffffff;
+  text-shadow:
+    -4px -4px 0 #8b4513,
+    4px -4px 0 #8b4513,
+    -4px 4px 0 #8b4513,
+    4px 4px 0 #8b4513;
+  animation: bounce 0.6s ease-out;
+}
+
+.chartGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.chartCard {
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  padding: 12px;
+  background: #fcfcfc;
+}
+
+@keyframes bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-16px);
+  }
+}
+
+@media (max-width: 900px) {
+  .page {
+    padding: 10px;
+  }
+
+  .gameFrame {
+    width: 100%;
+  }
+}
+
+.scopeSwitch {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.scopeBtn {
+  font-family: "Fredoka", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(180deg, #4c6ef5 0%, #3b5bdb 100%);
+  border: 3px solid #2f4bbd;
+  border-radius: 12px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.scopeBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.scopeBtnActive {
+  background: linear-gradient(180deg, #37b24d 0%, #2b8a3e 100%);
+  border-color: #1f6f31;
+}
+
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.metricGrid .chartCard p {
+  margin: 6px 0;
+}
