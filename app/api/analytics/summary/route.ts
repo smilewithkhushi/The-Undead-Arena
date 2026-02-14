@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getEvents } from "@/lib/event-store";
+import { readEventsFromSnowflake } from "@/lib/snowflake";
 import type { AnalyticsSummary, GameEvent } from "@/lib/types";
 
 function toNumber(input: unknown): number | null {
@@ -32,9 +33,18 @@ function getOutcomeScore(event: GameEvent): number {
 }
 
 export async function GET(req: Request) {
-  const allEvents = getEvents().slice().sort((a, b) => a.timestamp - b.timestamp);
   const { searchParams } = new URL(req.url);
   const sessionId = searchParams.get("session_id");
+
+  let allEvents: GameEvent[] = [];
+  try {
+    const snowflakeEvents = await readEventsFromSnowflake(null);
+    allEvents = (snowflakeEvents ?? getEvents()).slice().sort((a, b) => a.timestamp - b.timestamp);
+  } catch (err) {
+    console.error("Snowflake analytics read failed, falling back to memory", err);
+    allEvents = getEvents().slice().sort((a, b) => a.timestamp - b.timestamp);
+  }
+
   const scopedEvents = sessionId
     ? allEvents.filter((event) => event.session_id === sessionId)
     : allEvents;

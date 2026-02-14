@@ -44,9 +44,9 @@ const CANVAS_H = GAME_CONFIG.canvas.height;
 const LOSS_LINE_Y = CANVAS_H - 14;
 const MAX_ACTIVE_PEAS = 160;
 
-const ARENA_TOP_Y = 62;
+const ARENA_TOP_Y = 24;
 const ARENA_BOTTOM_Y = CANVAS_H - 12;
-const ARENA_TOP_WIDTH = 250;
+const ARENA_TOP_WIDTH = 320;
 const ARENA_BOTTOM_WIDTH = CANVAS_W - 34;
 
 const UNLOCK_STORAGE_KEY = "pvza_unlocked_plants";
@@ -82,11 +82,13 @@ export function GameCanvas() {
   const eventClientRef = useRef<EventClient | null>(null);
   const keysRef = useRef({ left: false, right: false });
   const imagesRef = useRef<Record<string, HTMLImageElement>>({});
+  const runScoreRef = useRef<number>(0);
 
   const [level, setLevel] = useState<LevelNumber>(1);
   const [status, setStatus] = useState<GameStatus>("idle");
   const [laserActive, setLaserActive] = useState<boolean>(true);
   const [shieldCooldownUntilLevel, setShieldCooldownUntilLevel] = useState<number>(0);
+  const [score, setScore] = useState<number>(0);
   const [zombiesKilled, setZombiesKilled] = useState<number>(0);
   const [zombiesRemaining, setZombiesRemaining] = useState<number>(LEVEL_CONFIG[1].zombies);
 
@@ -124,13 +126,26 @@ export function GameCanvas() {
     threatDetectedAt: null as number | null,
     threatResponseLogged: false,
     catalystSpawned: false,
-    shamblerSpawned: false
+    shamblerSpawned: false,
+    burstsRemaining: 0,
+    nextBurstAtProgress: 0.78,
+    burstSpawnsLeft: 0,
+    burstSpawnTimerMs: 0
   });
 
   const levelCfg = useMemo(() => LEVEL_CONFIG[level], [level]);
   const shieldConfigured = LEVEL_CONFIG[level].multiplier !== null;
   const shieldOnCooldown = shieldConfigured && level < shieldCooldownUntilLevel;
-  const score = zombiesKilled * 125 + (laserActive && LEVEL_CONFIG[level].multiplier ? 200 : 0);
+
+  const addRunScore = (points: number) => {
+    runScoreRef.current += points;
+    setScore(runScoreRef.current);
+  };
+
+  const resetRunScore = () => {
+    runScoreRef.current = 0;
+    setScore(0);
+  };
 
   useEffect(() => {
     const stored = window.localStorage.getItem(UNLOCK_STORAGE_KEY);
@@ -156,7 +171,7 @@ export function GameCanvas() {
         setCatalystKills(parsedKills);
       }
     }
-  }, [shieldCooldownUntilLevel]);
+  }, []);
 
   useEffect(() => {
     const map: Record<string, HTMLImageElement> = {};
@@ -166,7 +181,7 @@ export function GameCanvas() {
       map[key] = img;
     }
     imagesRef.current = map;
-  }, [shieldCooldownUntilLevel]);
+  }, []);
 
   const persistUnlocks = (plants: PlantType[], kills: number) => {
     window.localStorage.setItem(UNLOCK_STORAGE_KEY, JSON.stringify(plants));
@@ -178,6 +193,12 @@ export function GameCanvas() {
     return seconds * 1000;
   };
 
+  const getBurstWaveCount = (levelNumber: number): number => {
+    if (levelNumber % 5 === 0) return 2;
+    if (levelNumber % 3 === 0) return 1;
+    return 0;
+  };
+
   const queueLevelStart = (levelNumber: number) => {
     setPlantSelectionForModal(activePlant);
     setPlantModalLevel(levelNumber);
@@ -185,6 +206,11 @@ export function GameCanvas() {
 
   const startLevel = useCallback((levelNumber: LevelNumber, plant: PlantType) => {
     const shieldAvailableThisLevel = LEVEL_CONFIG[levelNumber].multiplier !== null && levelNumber >= shieldCooldownUntilLevel;
+    const shouldResetScore = levelNumber === 1 && (status === "lost" || status === "finished");
+
+    if (shouldResetScore) {
+      resetRunScore();
+    }
 
     setLevel(levelNumber);
     setStatus("running");
@@ -208,7 +234,7 @@ export function GameCanvas() {
       nextSpawnMs: randBetweenMs(
         LEVEL_CONFIG[levelNumber].spawnDelayRangeS[0],
         LEVEL_CONFIG[levelNumber].spawnDelayRangeS[1]
-      ),
+      ) * 0.62,
       spawned: 0,
       killed: 0,
       hits: 0,
@@ -224,14 +250,18 @@ export function GameCanvas() {
       threatDetectedAt: null,
       threatResponseLogged: false,
       catalystSpawned: false,
-      shamblerSpawned: false
+      shamblerSpawned: false,
+      burstsRemaining: getBurstWaveCount(levelNumber),
+      nextBurstAtProgress: 0.78,
+      burstSpawnsLeft: 0,
+      burstSpawnTimerMs: 0
     };
 
     eventClientRef.current?.track(levelNumber, "level_started", {
       level: levelNumber,
       active_plant: plant
     });
-  }, [shieldCooldownUntilLevel]);
+  }, [shieldCooldownUntilLevel, status]);
 
   useEffect(() => {
     const client = new EventClient();
@@ -393,10 +423,8 @@ export function GameCanvas() {
           }
         }
 
-        rt.msSinceSpawn += deltaMs;
-        if (rt.spawned < levelCfg.zombies && rt.msSinceSpawn >= rt.nextSpawnMs) {
-          rt.msSinceSpawn = 0;
-          rt.nextSpawnMs = randBetweenMs(levelCfg.spawnDelayRangeS[0], levelCfg.spawnDelayRangeS[1]);
+        const spawnSingleZombie = () => {
+          if (rt.spawned >= levelCfg.zombies) return;
 
           const spawnIndex = rt.spawned;
           const kind = pickZombieKind(level, spawnIndex, levelCfg.zombies, {
@@ -407,11 +435,37 @@ export function GameCanvas() {
           if (kind === "catalyst") rt.catalystSpawned = true;
           if (kind === "shambler") rt.shamblerSpawned = true;
 
-          const zombie = createZombie(kind, rt.nextZombieId++, levelCfg.speed);
+          const zombie = createZombie(kind, rt.nextZombieId++, levelCfg.speed, level);
           zombie.x = Math.random() * (CANVAS_W - getZombieWidth(kind));
-          zombie.y = GAME_CONFIG.zombie.spawnY - getZombieHeight(kind);
+          zombie.y = GAME_CONFIG.zombie.spawnY;
           rt.zombies.push(zombie);
           rt.spawned += 1;
+        };
+
+        rt.msSinceSpawn += deltaMs;
+        const spawnProgress = levelCfg.zombies > 0 ? rt.spawned / levelCfg.zombies : 0;
+
+        if (rt.burstsRemaining > 0 && rt.burstSpawnsLeft === 0 && spawnProgress >= rt.nextBurstAtProgress) {
+          rt.burstSpawnsLeft = Math.min(6, levelCfg.zombies - rt.spawned);
+          rt.burstSpawnTimerMs = 0;
+          rt.burstsRemaining -= 1;
+          rt.nextBurstAtProgress += 0.12;
+        }
+
+        if (rt.burstSpawnsLeft > 0) {
+          rt.burstSpawnTimerMs += deltaMs;
+          while (rt.burstSpawnsLeft > 0 && rt.spawned < levelCfg.zombies && rt.burstSpawnTimerMs >= 120) {
+            rt.burstSpawnTimerMs -= 120;
+            spawnSingleZombie();
+            rt.burstSpawnsLeft -= 1;
+          }
+        }
+
+        if (rt.spawned < levelCfg.zombies && rt.msSinceSpawn >= rt.nextSpawnMs) {
+          rt.msSinceSpawn = 0;
+          const densityBoost = rt.zombies.length < 4 ? 0.5 : 0.7;
+          rt.nextSpawnMs = randBetweenMs(levelCfg.spawnDelayRangeS[0], levelCfg.spawnDelayRangeS[1]) * densityBoost;
+          spawnSingleZombie();
         }
 
         const multiplier = levelCfg.multiplier;
@@ -512,7 +566,8 @@ export function GameCanvas() {
         for (const pea of rt.peas) {
           let consumed = false;
           for (const zombie of aliveZombies) {
-            if (zombie.y < GAME_CONFIG.zombie.spawnY) continue;
+            const damageStartY = GAME_CONFIG.zombie.spawnY + (LOSS_LINE_Y - GAME_CONFIG.zombie.spawnY) * 0.01;
+            if (zombie.y < damageStartY) continue;
 
             const hitZombie = circleHitsRect(
               pea.x,
@@ -541,6 +596,7 @@ export function GameCanvas() {
               rt.killed += 1;
               setZombiesKilled(rt.killed);
               setZombiesRemaining(levelCfg.zombies - rt.killed);
+              addRunScore(125);
 
               eventClientRef.current?.track(level, "zombie_killed", {
                 zombie_id: zombie.id,
@@ -590,13 +646,16 @@ export function GameCanvas() {
 
           const duration = (performance.now() - rt.startedAt) / 1000;
           const accuracy = rt.peasFired ? (rt.hits / rt.peasFired) * 100 : 0;
+          const levelBonus = rt.laserActive && levelCfg.multiplier !== null ? 200 : 0;
+          if (levelBonus > 0) addRunScore(levelBonus);
+          const finalScore = runScoreRef.current;
 
           eventClientRef.current?.track(level, "level_completed", {
             duration_seconds: Number(duration.toFixed(2)),
             peas_fired: rt.peasFired,
             accuracy_percent: Number(accuracy.toFixed(2)),
             laser_status: levelCfg.multiplier === null ? "not_present" : rt.laserActive ? "intact" : "destroyed",
-            score: rt.killed * 125 + (rt.laserActive && levelCfg.multiplier !== null ? 200 : 0)
+            score: finalScore
           });
         }
       } else {
@@ -799,8 +858,8 @@ function spawnPea(
   });
 }
 
-function createZombie(kind: ZombieKind, id: number, baseSpeed: number): Zombie {
-  const stats = getZombieStats(kind, baseSpeed);
+function createZombie(kind: ZombieKind, id: number, baseSpeed: number, level: number): Zombie {
+  const stats = getZombieStats(kind, baseSpeed, level);
   return {
     id,
     kind,
@@ -814,20 +873,32 @@ function createZombie(kind: ZombieKind, id: number, baseSpeed: number): Zombie {
   };
 }
 
-function getZombieStats(kind: ZombieKind, baseSpeed: number): { health: number; speed: number } {
-  if (kind === "ironhead") return { health: 5, speed: baseSpeed };
-  if (kind === "drdecay") return { health: 3, speed: baseSpeed * 1.5 };
-  if (kind === "shambler") return { health: 10, speed: baseSpeed * 0.45 };
-  if (kind === "catalyst") return { health: 3, speed: baseSpeed };
-  return { health: 3, speed: baseSpeed };
+function getZombieStats(kind: ZombieKind, baseSpeed: number, level: number): { health: number; speed: number } {
+  const hpBonus = Math.floor(level / 5) * 2;
+
+  if (kind === "rotter") return { health: 3 + hpBonus, speed: baseSpeed * 0.8 };
+  if (kind === "ironhead") return { health: 5 + hpBonus, speed: baseSpeed };
+  if (kind === "drdecay") return { health: 3 + hpBonus, speed: baseSpeed * 0.8 };
+  if (kind === "shambler") return { health: 10 + hpBonus, speed: baseSpeed * 0.45 };
+  if (kind === "catalyst") return { health: 3 + hpBonus, speed: baseSpeed };
+  return { health: 3 + hpBonus, speed: baseSpeed };
 }
 
+// zombie dimensions - size
 function getZombieWidth(kind: ZombieKind): number {
-  return GAME_CONFIG.zombie.width * 4;
+  if (kind === "ironhead") return Math.round(GAME_CONFIG.zombie.width * 3.4);
+  if (kind === "drdecay") return Math.round(GAME_CONFIG.zombie.width * 1.6);
+  if (kind === "shambler") return Math.round(GAME_CONFIG.zombie.width * 5.2);
+  if (kind === "catalyst") return Math.round(GAME_CONFIG.zombie.width * 2.2);
+  return GAME_CONFIG.zombie.width * 3;
 }
 
 function getZombieHeight(kind: ZombieKind): number {
-  return GAME_CONFIG.zombie.height * 3;
+  if (kind === "ironhead") return Math.round(GAME_CONFIG.zombie.height * 3.4);
+  if (kind === "drdecay") return Math.round(GAME_CONFIG.zombie.height * 2.8);
+  if (kind === "shambler") return Math.round(GAME_CONFIG.zombie.height * 4.2);
+  if (kind === "catalyst") return Math.round(GAME_CONFIG.zombie.height * 3.0);
+  return GAME_CONFIG.zombie.height * 3.3;
 }
 
 function pickZombieKind(
@@ -848,7 +919,9 @@ function pickZombieKind(
     }
   }
 
-  if (level <= 2) {
+  if (level === 1) return "rotter";
+
+  if (level === 2) {
     const earlyRoster: ZombieKind[] = ["rotter", "rotter", "ironhead"];
     return earlyRoster[spawnIndex % earlyRoster.length];
   }

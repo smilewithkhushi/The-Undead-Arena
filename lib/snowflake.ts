@@ -47,6 +47,26 @@ async function getConnection(): Promise<snowflake.Connection | null> {
   return connection;
 }
 
+async function executeStatement<T = unknown>(
+  conn: snowflake.Connection,
+  sqlText: string,
+  binds?: snowflake.Bind[]
+): Promise<T[]> {
+  return new Promise<T[]>((resolve, reject) => {
+    conn.execute({
+      sqlText,
+      binds,
+      complete: (err, _stmt, rows) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve((rows ?? []) as T[]);
+      }
+    });
+  });
+}
+
 export async function writeEventsToSnowflake(events: GameEvent[]): Promise<void> {
   if (!events.length) {
     return;
@@ -57,30 +77,89 @@ export async function writeEventsToSnowflake(events: GameEvent[]): Promise<void>
     return;
   }
 
-  const values = events
-    .map(
-      (e) =>
-        `('${e.event_id}','${e.session_id}',TO_TIMESTAMP_NTZ(${e.timestamp}/1000),'${e.event_type}',${e.level},PARSE_JSON('${JSON.stringify(
-          e.data
-        ).replace(/'/g, "''")}'))`
-    )
-    .join(",");
-
   const sqlText = `
     INSERT INTO game_events (event_id, session_id, timestamp, event_type, level, data)
-    VALUES ${values}
+    SELECT ?, ?, TO_TIMESTAMP_NTZ(? / 1000), ?, ?, PARSE_JSON(?)
   `;
 
-  await new Promise<void>((resolve, reject) => {
-    conn.execute({
-      sqlText,
-      complete: (err) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve();
-      }
-    });
-  });
+  for (const event of events) {
+    await executeStatement(conn, sqlText, [
+      event.event_id,
+      event.session_id,
+      event.timestamp,
+      event.event_type,
+      event.level,
+      JSON.stringify(event.data)
+    ]);
+  }
+}
+
+type SnowflakeEventRow = {
+  EVENT_ID: string;
+  SESSION_ID: string;
+  TS_MS: number;
+  EVENT_TYPE: string;
+  LEVEL: number;
+  DATA: unknown;
+};
+
+function parseRowData(input: unknown): Record<string, unknown> {
+  if (input && typeof input === "object") {
+    return input as Record<string, unknown>;
+  }
+
+  if (typeof input === "string") {
+    try {
+      const parsed = JSON.parse(input) as Record<string, unknown>;
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  return {};
+}
+
+export async function readEventsFromSnowflake(sessionId: string | null): Promise<GameEvent[] | null> {
+  const conn = await getConnection();
+  if (!conn) {
+    return null;
+  }
+
+  const hasSession = Boolean(sessionId);
+  const sqlText = hasSession
+    ? `
+      SELECT
+        event_id,
+        session_id,
+        DATE_PART(EPOCH_MILLISECOND, timestamp) AS ts_ms,
+        event_type,
+        level,
+        data
+      FROM game_events
+      WHERE session_id = ?
+      ORDER BY timestamp ASC
+    `
+    : `
+      SELECT
+        event_id,
+        session_id,
+        DATE_PART(EPOCH_MILLISECOND, timestamp) AS ts_ms,
+        event_type,
+        level,
+        data
+      FROM game_events
+      ORDER BY timestamp ASC
+    `;
+
+  const rows = await executeStatement<SnowflakeEventRow>(conn, sqlText, hasSession ? [sessionId] : undefined);
+
+  return rows.map((row) => ({
+    event_id: String(row.EVENT_ID),
+    session_id: String(row.SESSION_ID),
+    timestamp: Number(row.TS_MS),
+    event_type: String(row.EVENT_TYPE) as GameEvent["event_type"],
+    level: Number(row.LEVEL),
+    data: parseRowData(row.DATA)
+  }));
 }

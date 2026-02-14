@@ -16,7 +16,7 @@ export const GAME_CONFIG = {
     width: 88,
     height: 78,
     health: 3,
-    spawnY: 0
+    spawnY: -74
   },
   laser: {
     y: 410,
