@@ -23,8 +23,12 @@ Built for the **Snowflake Buildathon** — The Undead Arena combines a fully pla
 
 ## Architecture
 
+### System Overview
+
+The full data path — from a zombie kill on the canvas to a chart on the dashboard.
+
 <p align="center">
-  <img src="public/architecture.png" alt="Architecture Diagram" width="100%" />
+  <img src="public/HL_system_flow.png" alt="High-Level System Flow" width="100%" />
 </p>
 
 1. The game loop emits structured events on every kill, level change, shield use, and game outcome.
@@ -33,11 +37,38 @@ Built for the **Snowflake Buildathon** — The Undead Arena combines a fully pla
 4. `/api/analytics/summary` queries Snowflake to compute real-time dashboard metrics.
 5. `/dashboard` renders session-level and aggregate gameplay insights.
 
+### Game Engine
+
+What's running inside the canvas at 60 FPS — spawning, shooting, collision, and scoring.
+
+<p align="center">
+  <img src="public/game_engine.png" alt="Game Engine Architecture" width="100%" />
+</p>
+
+- **5 zombie types** with distinct HP, speed, and behavior — rotter, ironhead, drdecay, shambler, catalyst
+- **3 plant tiers** unlocked through gameplay — basic, double, triple shot
+- **Laser shield** multiplies peas (2x/3x) and adds a tactical protection layer with cooldown on destruction
+- **21 levels** with scaling difficulty, burst waves, and Fibonacci-level specials
+
+### Event Pipeline and Reliability
+
+How gameplay telemetry survives network failures and reaches Snowflake intact.
+
+<p align="center">
+  <img src="public/pipeline.png" alt="Event Pipeline & Reliability" width="100%" />
+</p>
+
+- **14 event types** tracked — from `pea_fired` to `panic_detected`
+- **Batched delivery** — 250 events per POST, flushed every ~2 seconds
+- **Critical event fast-path** — `laser_destroyed`, `level_completed`, `level_failed` flush immediately
+- **Exponential backoff** (1.5s to 30s) on transient failures
+- **localStorage persistence** + `sendBeacon` on page unload — no events lost
+- **Graceful degradation** — if Snowflake is unreachable, analytics falls back to in-memory store
+
 ---
 
 ## Snowflake Integration
 
-### Pipeline Design
 Every gameplay action is captured as a structured event and persisted to Snowflake in near real time.
 
 | Snowflake Object | Value |
@@ -57,22 +88,6 @@ Every gameplay action is captured as a structured event and persisted to Snowfla
 | `event_type` | STRING | Category: `kill`, `level_start`, `game_over`, etc. |
 | `level` | INTEGER | Current game level |
 | `data` | VARIANT | Flexible JSON payload (zombie type, score, HP, etc.) |
-
-### Reliability Engineering
-- **Batched writes** — reduces per-event Snowflake overhead
-- **Queue cap** — prevents unbounded memory growth during intense gameplay
-- **Exponential backoff** — retries transient write failures gracefully
-- **Fallback-safe reads** — dashboard degrades cleanly if Snowflake is unreachable
-
----
-
-## Gameplay
-
-- Canvas-rendered arena with perspective lane field and progressive difficulty scaling
-- **6 zombie archetypes** — each with distinct HP, speed, and visual design
-- Wave-based levels with special burst-wave stages
-- Shield system with cooldown mechanics for tactical decision-making
-- Per-zombie health bars, hit feedback, and score accumulation across levels
 
 ---
 

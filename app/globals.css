@@ -60,6 +60,7 @@
   }
 
   .btn-danger {
+    @apply btn-game;
     background: linear-gradient(180deg, #e74c3c 0%, #c0392b 100%);
     border-color: #a93226;
     box-shadow: 0 6px 0 #7b241c, 0 8px 12px rgba(0, 0, 0, 0.3);
@@ -173,6 +174,14 @@
        1px -1px 0 #2c3e50,
       -1px  1px 0 #2c3e50,
        1px  1px 0 #2c3e50;
+  }
+}
+
+@layer components {
+  .credit-footer {
+    @apply mx-auto w-full max-w-[980px] rounded-xl px-4 py-2 text-center text-[14px] font-semibold text-white shadow-[0_6px_16px_rgba(0,0,0,0.22)];
+    background: linear-gradient(90deg, rgba(103, 167, 78, 0.9) 0%, rgba(200, 160, 102, 0.9) 100%);
+    border: 2px solid rgba(74, 47, 18, 0.45);
   }
 }
 

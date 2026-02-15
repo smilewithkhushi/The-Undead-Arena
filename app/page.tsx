@@ -12,6 +12,7 @@ export default function HomePage() {
           Open Dashboard
         </Link>
       </div>
+      <footer className="credit-footer">made with ❤️ by @smilewithkhushi</footer>
     </main>
   );
 }

@@ -7,6 +7,15 @@ import { FIBONACCI_LEVELS, GAME_CONFIG, LEVEL_CONFIG, LEVEL_COUNT, type LevelNum
 type GameStatus = "idle" | "running" | "won" | "lost" | "finished";
 type PlantType = "basic" | "double" | "triple";
 type ZombieKind = "rotter" | "ironhead" | "drdecay" | "shambler" | "catalyst";
+type SoundKey =
+  | "gameStart"
+  | "gameOver"
+  | "gameBonus"
+  | "retroLaser"
+  | "shieldBreak"
+  | "shoot"
+  | "zombieDeath"
+  | "zombieSpawn";
 
 interface Pea {
   id: number;
@@ -39,6 +48,14 @@ interface Sparkle {
   size: number;
 }
 
+interface SlimeRemains {
+  kind: ZombieKind;
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+}
+
 const CANVAS_W = GAME_CONFIG.canvas.width;
 const CANVAS_H = GAME_CONFIG.canvas.height;
 const LOSS_LINE_Y = CANVAS_H - 14;
@@ -51,18 +68,49 @@ const ARENA_BOTTOM_WIDTH = CANVAS_W - 34;
 
 const UNLOCK_STORAGE_KEY = "pvza_unlocked_plants";
 const CATALYST_KILLS_STORAGE_KEY = "pvza_catalyst_kills";
+const RUN_SESSION_STORAGE_KEY = "pvza_run_session";
 const ALL_PLANTS: PlantType[] = ["basic", "double", "triple"];
 
+type RunSessionState = {
+  level: number;
+  score: number;
+  shieldCooldownUntilLevel: number;
+  activePlant: PlantType;
+};
+
 const spritePaths = {
-  plantBasic: "/assets/front/plant-basic.png",
-  plantDouble: "/assets/front/plant-double.png",
-  plantTriple: "/assets/back/plant-triple.png",
-  zombieRotter: "/assets/zombie-rotter.png",
-  zombieIronhead: "/assets/zombie-ironhead.png",
-  zombieDrdecay: "/assets/zombie-drdecay.png",
-  zombieShambler: "/assets/zombie-shambler.png",
-  zombieCatalyst: "/assets/zombie-catalyst.png"
+  plantBasic: "/assets/plant/single.png",
+  plantDouble: "/assets/plant/double.png",
+  plantTriple: "/assets/plant/triple.png",
+  zombieRotter: "/assets/zombie/rotter.png",
+  zombieIronhead: "/assets/zombie/ironhead.png",
+  zombieDrdecay: "/assets/zombie/decay.png",
+  zombieShambler: "/assets/zombie/shambler.png",
+  zombieCatalyst: "/assets/zombie/catalyst.png",
+  zombieDeadSlime: "/assets/zombie/dead-slime.png"
 } as const;
+
+const soundPaths: Record<SoundKey, string> = {
+  gameStart: "/sounds/gamestart.mp3",
+  gameOver: "/sounds/gameover.mp3",
+  gameBonus: "/sounds/gamebonus.mp3",
+  retroLaser: "/sounds/retro-laser.mp3",
+  shieldBreak: "/sounds/shield-break.mp3",
+  shoot: "/sounds/shoot.mp3",
+  zombieDeath: "/sounds/zombie-death.mp3",
+  zombieSpawn: "/sounds/zombie-spawn.mp3"
+};
+
+const soundVolume: Record<SoundKey, number> = {
+  gameStart: 0.5,
+  gameOver: 0.6,
+  gameBonus: 0.5,
+  retroLaser: 0.35,
+  shieldBreak: 0.6,
+  shoot: 0.25,
+  zombieDeath: 0.35,
+  zombieSpawn: 0.28
+};
 
 function getPlantSpritePath(plant: PlantType): string {
   if (plant === "double") return spritePaths.plantDouble;
@@ -82,6 +130,8 @@ export function GameCanvas() {
   const eventClientRef = useRef<EventClient | null>(null);
   const keysRef = useRef({ left: false, right: false });
   const imagesRef = useRef<Record<string, HTMLImageElement>>({});
+  const soundsRef = useRef<Partial<Record<SoundKey, HTMLAudioElement>>>({});
+  const soundLastPlayedAtRef = useRef<Partial<Record<SoundKey, number>>>({});
   const runScoreRef = useRef<number>(0);
 
   const [level, setLevel] = useState<LevelNumber>(1);
@@ -104,6 +154,7 @@ export function GameCanvas() {
     peas: [] as Pea[],
     zombies: [] as Zombie[],
     sparkles: [] as Sparkle[],
+    slimeRemains: [] as SlimeRemains[],
     nextPeaId: 1,
     nextZombieId: 1,
     msSinceShot: 0,
@@ -147,7 +198,26 @@ export function GameCanvas() {
     setScore(0);
   };
 
+  const playSound = useCallback((key: SoundKey, minGapMs = 0) => {
+    const base = soundsRef.current[key];
+    if (!base) return;
+
+    const now = performance.now();
+    const last = soundLastPlayedAtRef.current[key] ?? -Infinity;
+    if (now - last < minGapMs) return;
+    soundLastPlayedAtRef.current[key] = now;
+
+    const instance = base.cloneNode() as HTMLAudioElement;
+    instance.volume = soundVolume[key];
+    instance.currentTime = 0;
+    void instance.play().catch(() => {
+      // Browser blocked autoplay or audio device unavailable.
+    });
+  }, []);
+
   useEffect(() => {
+    let resolvedUnlockedPlants: PlantType[] = ["basic"];
+
     const stored = window.localStorage.getItem(UNLOCK_STORAGE_KEY);
     const storedKills = window.localStorage.getItem(CATALYST_KILLS_STORAGE_KEY);
 
@@ -156,6 +226,7 @@ export function GameCanvas() {
         const parsed = JSON.parse(stored) as PlantType[];
         const safe = ALL_PLANTS.filter((p) => parsed.includes(p));
         if (safe.length) {
+          resolvedUnlockedPlants = safe;
           setUnlockedPlants(safe);
           setActivePlant(safe[safe.length - 1]);
           setPlantSelectionForModal(safe[safe.length - 1]);
@@ -171,7 +242,52 @@ export function GameCanvas() {
         setCatalystKills(parsedKills);
       }
     }
+
+    const runSessionRaw = window.sessionStorage.getItem(RUN_SESSION_STORAGE_KEY);
+    if (runSessionRaw) {
+      try {
+        const parsed = JSON.parse(runSessionRaw) as RunSessionState;
+        const restoredLevel = Math.max(1, Math.min(LEVEL_COUNT, Math.floor(parsed.level || 1))) as LevelNumber;
+        const restoredScore = Number.isFinite(parsed.score) ? Math.max(0, parsed.score) : 0;
+        const restoredCooldown = Number.isFinite(parsed.shieldCooldownUntilLevel)
+          ? Math.max(0, Math.floor(parsed.shieldCooldownUntilLevel))
+          : 0;
+        const restoredPlant = ALL_PLANTS.includes(parsed.activePlant) ? parsed.activePlant : "basic";
+        const activeFromSession = resolvedUnlockedPlants.includes(restoredPlant)
+          ? restoredPlant
+          : resolvedUnlockedPlants[resolvedUnlockedPlants.length - 1];
+
+        setLevel(restoredLevel);
+        setStatus("idle");
+        setZombiesKilled(0);
+        setZombiesRemaining(LEVEL_CONFIG[restoredLevel].zombies);
+        setShieldCooldownUntilLevel(restoredCooldown);
+        setActivePlant(activeFromSession);
+        setPlantSelectionForModal(activeFromSession);
+        runScoreRef.current = restoredScore;
+        setScore(restoredScore);
+      } catch {
+        window.sessionStorage.removeItem(RUN_SESSION_STORAGE_KEY);
+      }
+    }
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if (status === "lost") {
+      window.sessionStorage.removeItem(RUN_SESSION_STORAGE_KEY);
+      return;
+    }
+
+    const payload: RunSessionState = {
+      level,
+      score: runScoreRef.current,
+      shieldCooldownUntilLevel,
+      activePlant
+    };
+    window.sessionStorage.setItem(RUN_SESSION_STORAGE_KEY, JSON.stringify(payload));
+  }, [activePlant, level, shieldCooldownUntilLevel, status, score]);
 
   useEffect(() => {
     const map: Record<string, HTMLImageElement> = {};
@@ -181,6 +297,26 @@ export function GameCanvas() {
       map[key] = img;
     }
     imagesRef.current = map;
+  }, []);
+
+  useEffect(() => {
+    const map: Partial<Record<SoundKey, HTMLAudioElement>> = {};
+    for (const [key, path] of Object.entries(soundPaths) as Array<[SoundKey, string]>) {
+      const audio = new Audio(path);
+      audio.preload = "auto";
+      audio.volume = soundVolume[key];
+      map[key] = audio;
+    }
+    soundsRef.current = map;
+
+    return () => {
+      for (const audio of Object.values(soundsRef.current)) {
+        if (!audio) continue;
+        audio.pause();
+        audio.src = "";
+      }
+      soundsRef.current = {};
+    };
   }, []);
 
   const persistUnlocks = (plants: PlantType[], kills: number) => {
@@ -225,6 +361,7 @@ export function GameCanvas() {
       peas: [],
       zombies: [],
       sparkles: [],
+      slimeRemains: [],
       nextPeaId: 1,
       nextZombieId: 1,
       msSinceShot: 0,
@@ -257,11 +394,13 @@ export function GameCanvas() {
       burstSpawnTimerMs: 0
     };
 
+    playSound("gameStart", 120);
+
     eventClientRef.current?.track(levelNumber, "level_started", {
       level: levelNumber,
       active_plant: plant
     });
-  }, [shieldCooldownUntilLevel, status]);
+  }, [playSound, shieldCooldownUntilLevel, status]);
 
   useEffect(() => {
     const client = new EventClient();
@@ -394,19 +533,20 @@ export function GameCanvas() {
         rt.previousCartX = rt.cartX;
 
         rt.msSinceShot += deltaMs;
+        const playShoot = () => playSound("shoot", 70);
 
         if (activePlant === "double") {
           if (rt.doubleSecondPending) {
             rt.doubleSecondDelayMs -= deltaMs;
             if (rt.doubleSecondDelayMs <= 0) {
-              spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
+              spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current, playShoot);
               rt.doubleSecondPending = false;
             }
           }
 
           if (rt.msSinceShot >= GAME_CONFIG.pea.fireIntervalMs && !rt.doubleSecondPending) {
             rt.msSinceShot = 0;
-            spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
+            spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current, playShoot);
             rt.doubleSecondPending = true;
             rt.doubleSecondDelayMs = 500;
           }
@@ -414,12 +554,12 @@ export function GameCanvas() {
           rt.msSinceShot = 0;
 
           if (activePlant === "basic") {
-            spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
+            spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current, playShoot);
           } else {
             const baseX = rt.cartX + GAME_CONFIG.cart.width / 2;
-            spawnPea(rt, baseX - 28, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
-            spawnPea(rt, baseX, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
-            spawnPea(rt, baseX + 28, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
+            spawnPea(rt, baseX - 28, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current, playShoot);
+            spawnPea(rt, baseX, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current, playShoot);
+            spawnPea(rt, baseX + 28, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current, playShoot);
           }
         }
 
@@ -437,9 +577,10 @@ export function GameCanvas() {
 
           const zombie = createZombie(kind, rt.nextZombieId++, levelCfg.speed, level);
           zombie.x = Math.random() * (CANVAS_W - getZombieWidth(kind));
-          zombie.y = GAME_CONFIG.zombie.spawnY;
+          zombie.y = getSpawnYForKind(kind);
           rt.zombies.push(zombie);
           rt.spawned += 1;
+          playSound("zombieSpawn", 110);
         };
 
         rt.msSinceSpawn += deltaMs;
@@ -502,6 +643,7 @@ export function GameCanvas() {
               multiplier,
               resulting_peas: cloneCount
             });
+            playSound("retroLaser", 90);
             continue;
           }
 
@@ -533,6 +675,7 @@ export function GameCanvas() {
 
               if (multiplier !== null) {
                 setShieldCooldownUntilLevel((prev) => Math.max(prev, level + 5));
+                playSound("shieldBreak", 120);
                 eventClientRef.current?.track(level, "laser_destroyed", {
                   zombie_id: zombie.id,
                   multiplier_lost: multiplier,
@@ -544,6 +687,9 @@ export function GameCanvas() {
           }
 
           if (zombie.y + getZombieHeight(zombie.kind) >= LOSS_LINE_Y) {
+            if (!rt.levelFailed) {
+              playSound("gameOver", 300);
+            }
             rt.levelFailed = true;
             setStatus("lost");
             const remaining = levelCfg.zombies - rt.killed;
@@ -594,9 +740,11 @@ export function GameCanvas() {
 
             if (zombie.health <= 0) {
               rt.killed += 1;
+              playSound("zombieDeath", 40);
               setZombiesKilled(rt.killed);
               setZombiesRemaining(levelCfg.zombies - rt.killed);
               addRunScore(125);
+              rt.slimeRemains.push(createSlimeRemains(zombie));
 
               eventClientRef.current?.track(level, "zombie_killed", {
                 zombie_id: zombie.id,
@@ -622,6 +770,7 @@ export function GameCanvas() {
 
                 if (message) {
                   setUnlockNotice(message);
+                  playSound("gameBonus", 160);
                   setUnlockedPlants(nextUnlocked);
                   persistUnlocks(nextUnlocked, nextKills);
                 } else {
@@ -639,9 +788,11 @@ export function GameCanvas() {
         rt.peas = alivePeas;
         rt.zombies = aliveZombies.filter((zombie) => zombie.health > 0);
         rt.sparkles = updateSparkles(rt.sparkles, deltaSec);
+        rt.slimeRemains = updateSlimeRemains(rt.slimeRemains, deltaSec);
 
         if (!rt.levelFailed && rt.killed >= levelCfg.zombies) {
           const levelFinished = level >= LEVEL_COUNT;
+          playSound("gameBonus", 220);
           setStatus(levelFinished ? "finished" : "won");
 
           const duration = (performance.now() - rt.startedAt) / 1000;
@@ -660,6 +811,7 @@ export function GameCanvas() {
         }
       } else {
         runtimeRef.current.sparkles = updateSparkles(runtimeRef.current.sparkles, deltaSec);
+        runtimeRef.current.slimeRemains = updateSlimeRemains(runtimeRef.current.slimeRemains, deltaSec);
       }
 
       ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
@@ -673,7 +825,7 @@ export function GameCanvas() {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [activePlant, catalystKills, level, levelCfg, status, unlockedPlants]);
+  }, [activePlant, catalystKills, level, levelCfg, playSound, status, unlockedPlants]);
 
   return (
     <section className="panel max-w-[1600px]">
@@ -715,32 +867,35 @@ export function GameCanvas() {
                 <h2 className="level-complete-title" style={{ fontSize: "clamp(28px,6vw,44px)" }}>
                   Select Plant
                 </h2>
-                <p className="text-[16px] md:text-[17px]">Choose active plant for Level {plantModalLevel}. Default keeps previous plant.</p>
 
                 <div className="mt-4 flex w-full items-stretch justify-start gap-3 overflow-x-auto pb-2">
                   {unlockedPlants.map((plant) => (
-                    <div
+                    <button
+                      type="button"
                       key={plant}
                       className={"flex min-w-[140px] flex-col items-center gap-2 rounded-2xl border-2 p-2 " +
                         (plantSelectionForModal === plant
-                          ? "border-[#1f6f31] bg-white/25 ring-2 ring-[#37b24d]/50"
+                          ? "border-[#7c5c28] ring-2 ring-[#7c5c28]/40"
                           : "border-white/40 bg-white/10")}
                       style={{
                         backgroundColor: plantSelectionForModal === plant
-                          ? undefined
+                          ? plant === "triple"
+                            ? "#f5ead7"
+                            : "#dbeafe"
                           : plant === "basic"
                             ? "#ecfdf5"
                             : plant === "double"
                               ? "#eff6ff"
                               : "#f5f3ff",
                         borderColor: plantSelectionForModal === plant
-                          ? undefined
+                          ? "#7c5c28"
                           : plant === "basic"
                             ? "#34d399"
                             : plant === "double"
                               ? "#60a5fa"
                               : "#a78bfa"
                       }}
+                      onClick={() => setPlantSelectionForModal(plant)}
                     >
                       <img
                         src={getPlantSpritePath(plant)}
@@ -748,13 +903,10 @@ export function GameCanvas() {
                         className="h-14 w-16 object-contain drop-shadow-[0_3px_4px_rgba(0,0,0,0.25)]"
                         loading="lazy"
                       />
-                      <button
-                        className={(plantSelectionForModal === plant ? "btn-primary" : "btn-game") + " px-4 py-2 text-[13px] md:text-[14px]"}
-                        onClick={() => setPlantSelectionForModal(plant)}
-                      >
+                      <span className="text-[13px] font-semibold text-[#2f2f2f] md:text-[14px]">
                         {getPlantLabel(plant)}
-                      </button>
-                    </div>
+                      </span>
+                    </button>
                   ))}
                 </div>
 
@@ -836,7 +988,8 @@ function spawnPea(
   wasMultiplied: boolean,
   speedFactor: number,
   level: number,
-  eventClient: EventClient | null
+  eventClient: EventClient | null,
+  onPeaFired?: () => void
 ): void {
   runtime.peas.push({
     id: runtime.nextPeaId++,
@@ -856,6 +1009,7 @@ function spawnPea(
     cart_x: Math.round(x),
     laser_aligned: Math.abs(x - CANVAS_W / 2) < 110
   });
+  onPeaFired?.();
 }
 
 function createZombie(kind: ZombieKind, id: number, baseSpeed: number, level: number): Zombie {
@@ -886,19 +1040,25 @@ function getZombieStats(kind: ZombieKind, baseSpeed: number, level: number): { h
 
 // zombie dimensions - size
 function getZombieWidth(kind: ZombieKind): number {
-  if (kind === "ironhead") return Math.round(GAME_CONFIG.zombie.width * 3.4);
-  if (kind === "drdecay") return Math.round(GAME_CONFIG.zombie.width * 1.6);
-  if (kind === "shambler") return Math.round(GAME_CONFIG.zombie.width * 5.2);
+  if (kind === "ironhead") return 250;
+  if (kind === "drdecay") return 220;
+  if (kind === "shambler") return 400;
   if (kind === "catalyst") return Math.round(GAME_CONFIG.zombie.width * 2.2);
   return GAME_CONFIG.zombie.width * 3;
 }
 
 function getZombieHeight(kind: ZombieKind): number {
-  if (kind === "ironhead") return Math.round(GAME_CONFIG.zombie.height * 3.4);
-  if (kind === "drdecay") return Math.round(GAME_CONFIG.zombie.height * 2.8);
-  if (kind === "shambler") return Math.round(GAME_CONFIG.zombie.height * 4.2);
+  if (kind === "ironhead") return 280;
+  if (kind === "drdecay") return 220;
+  if (kind === "shambler") return 550;
   if (kind === "catalyst") return Math.round(GAME_CONFIG.zombie.height * 3.0);
   return GAME_CONFIG.zombie.height * 3.3;
+}
+
+function getSpawnYForKind(kind: ZombieKind): number {
+  const baseSpawnY = GAME_CONFIG.zombie.spawnY;
+  const rotterFeetY = baseSpawnY + getZombieHeight("rotter");
+  return rotterFeetY - getZombieHeight(kind);
 }
 
 function pickZombieKind(
@@ -947,6 +1107,7 @@ function drawScene(
     peas: Pea[];
     zombies: Zombie[];
     sparkles: Sparkle[];
+    slimeRemains: SlimeRemains[];
     laserActive: boolean;
     shieldEnabled: boolean;
   },
@@ -1019,6 +1180,28 @@ function drawScene(
     ctx.fill();
   }
 
+  const slime = images.zombieDeadSlime;
+  for (const remains of runtime.slimeRemains) {
+    const p = projectPoint(remains.x, remains.y);
+    const alpha = Math.max(0.2, remains.life / remains.maxLife);
+    const rotterWidth = Math.max(18, getZombieWidth("rotter") * p.scale * 0.6);
+    const zombieWidth = Math.max(18, getZombieWidth(remains.kind) * p.scale * 0.6);
+    const w = Math.max(rotterWidth, zombieWidth);
+    const h = Math.max(12, w * 0.22);
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (slime && slime.complete) {
+      ctx.drawImage(slime, p.x - w / 2, p.y - h / 2, w, h);
+    } else {
+      ctx.fillStyle = "#5f7f35";
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, w / 2, h / 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   for (const zombie of runtime.zombies) {
     const p = projectPoint(zombie.x + getZombieWidth(zombie.kind) / 2, zombie.y + getZombieHeight(zombie.kind) / 2);
     const zw = Math.max(18, getZombieWidth(zombie.kind) * p.scale * 0.6);
@@ -1043,8 +1226,8 @@ function drawPlant(
   plant: PlantType,
   images: Record<string, HTMLImageElement>
 ): void {
-  const w = Math.max(44, GAME_CONFIG.cart.width * scale * 1.1);
-  const h = Math.max(48, GAME_CONFIG.cart.height * scale * 2.8);
+  const w = 100;
+  const h = 100;
 
   const key = plant === "double" ? "plantDouble" : plant === "triple" ? "plantTriple" : "plantBasic";
   const img = images[key];
@@ -1103,7 +1286,10 @@ function drawArenaBase(ctx: CanvasRenderingContext2D): void {
   const leftBottom = CANVAS_W / 2 - ARENA_BOTTOM_WIDTH / 2;
   const rightBottom = CANVAS_W / 2 + ARENA_BOTTOM_WIDTH / 2;
 
-  ctx.fillStyle = "#3f7f2d";
+  const lawnGradient = ctx.createLinearGradient(0, ARENA_TOP_Y, 0, ARENA_BOTTOM_Y);
+  lawnGradient.addColorStop(0, "#9edc8a");
+  lawnGradient.addColorStop(1, "#e8d7b8");
+  ctx.fillStyle = lawnGradient;
   ctx.beginPath();
   ctx.moveTo(leftTop, ARENA_TOP_Y);
   ctx.lineTo(rightTop, ARENA_TOP_Y);
@@ -1237,6 +1423,17 @@ function createSparkles(x: number, y: number): Sparkle[] {
   return list;
 }
 
+function createSlimeRemains(zombie: Zombie): SlimeRemains {
+  const lifetime = 5 + Math.random() * 5;
+  return {
+    kind: zombie.kind,
+    x: zombie.x + getZombieWidth(zombie.kind) / 2,
+    y: zombie.y + getZombieHeight(zombie.kind) * 0.86,
+    life: lifetime,
+    maxLife: lifetime
+  };
+}
+
 function updateSparkles(sparkles: Sparkle[], dt: number): Sparkle[] {
   const next: Sparkle[] = [];
   for (const s of sparkles) {
@@ -1249,6 +1446,16 @@ function updateSparkles(sparkles: Sparkle[], dt: number): Sparkle[] {
       vy: s.vy + 84 * dt,
       life
     });
+  }
+  return next;
+}
+
+function updateSlimeRemains(remains: SlimeRemains[], dt: number): SlimeRemains[] {
+  const next: SlimeRemains[] = [];
+  for (const item of remains) {
+    const life = item.life - dt;
+    if (life <= 0) continue;
+    next.push({ ...item, life });
   }
   return next;
 }
