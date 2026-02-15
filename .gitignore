@@ -5,6 +5,13 @@ node_modules
 npm-debug.log*
 tsconfig.tsbuildinfo
 
+snowflake-*.log
+snowflake.log
+
+.sql
+*.sql
+sql/
+
 .vscode
 .idea
 .next
@@ -19,3 +26,7 @@ logs
 *.tsbuildinfo
 *.env
 *.env.local
+package-lock.json
+yarn.lock
+*.iml
+*.suo

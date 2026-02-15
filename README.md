@@ -28,44 +28,59 @@ Dashboard: [http://localhost:3000/dashboard](http://localhost:3000/dashboard)
 ### What is wired
 - `POST /api/events` writes incoming event batches into Snowflake table `game_events`.
 - `GET /api/analytics/summary` reads events from Snowflake for analytics.
-- If Snowflake env is missing or read fails, analytics route falls back to in-memory event store.
+- `GET /api/snowflake/health` checks connection + table access.
+- Analytics fallback behavior:
+  - default: falls back to in-memory events if Snowflake is unavailable
+  - strict mode: set `STRICT_SNOWFLAKE_ANALYTICS=true` to fail with 503 instead of fallback
 
-### Files
+### Core files
 - `/Users/khushipanwar/Documents/TheUndeadArena/lib/snowflake.ts`
 - `/Users/khushipanwar/Documents/TheUndeadArena/app/api/events/route.ts`
 - `/Users/khushipanwar/Documents/TheUndeadArena/app/api/analytics/summary/route.ts`
-- `/Users/khushipanwar/Documents/TheUndeadArena/sql/snowflake_setup.sql`
-- `/Users/khushipanwar/Documents/TheUndeadArena/.env.example`
+- `/Users/khushipanwar/Documents/TheUndeadArena/app/api/snowflake/health/route.ts`
 
-## Manual Setup You Need To Do
+## Manual Setup (You Do This)
 
-### 1) Create Snowflake objects
-- Open Snowflake Worksheet.
-- Run:
-  - `/Users/khushipanwar/Documents/TheUndeadArena/sql/snowflake_setup.sql`
+### 1) Run Snowflake setup SQL in worksheet
 
-### 2) Create local env file
-- Copy `.env.example` to `.env.local`.
-- Fill values:
-  - `SNOWFLAKE_ACCOUNT`
-  - `SNOWFLAKE_USERNAME`
-  - `SNOWFLAKE_PASSWORD`
-  - `SNOWFLAKE_WAREHOUSE`
-  - `SNOWFLAKE_DATABASE`
-  - `SNOWFLAKE_SCHEMA`
-  - `SNOWFLAKE_ROLE` (optional)
+```sql
+CREATE WAREHOUSE IF NOT EXISTS UNDEAD_ARENA_WH
+  WITH WAREHOUSE_SIZE = 'XSMALL'
+  AUTO_SUSPEND = 60
+  AUTO_RESUME = TRUE
+  INITIALLY_SUSPENDED = TRUE;
 
-### 3) Grant role permissions (if needed)
-Your Snowflake role should have usage + DML rights on warehouse/database/schema/table.
+CREATE DATABASE IF NOT EXISTS UNDEAD_ARENA_DB;
+CREATE SCHEMA IF NOT EXISTS UNDEAD_ARENA_DB.GAME;
 
-### 4) Restart app
-After updating `.env.local`:
-
-```bash
-npm run dev
+CREATE TABLE IF NOT EXISTS UNDEAD_ARENA_DB.GAME.game_events (
+  event_id VARCHAR(36) PRIMARY KEY,
+  session_id VARCHAR(36) NOT NULL,
+  timestamp TIMESTAMP_NTZ NOT NULL,
+  event_type VARCHAR(64) NOT NULL,
+  level INTEGER,
+  data VARIANT
+);
 ```
 
-### 5) Verify writes
+### 2) Add local env vars in `.env` (or `.env.local`)
+
+```env
+SNOWFLAKE_ACCOUNT=
+SNOWFLAKE_USERNAME=
+SNOWFLAKE_PASSWORD=
+SNOWFLAKE_WAREHOUSE=UNDEAD_ARENA_WH
+SNOWFLAKE_DATABASE=UNDEAD_ARENA_DB
+SNOWFLAKE_SCHEMA=GAME
+SNOWFLAKE_ROLE=
+STRICT_SNOWFLAKE_ANALYTICS=false
+```
+
+### 3) Verify connection
+- Open: `http://localhost:3000/api/snowflake/health`
+- Expected healthy response includes `ok: true` and `eventCount`.
+
+### 4) Verify writes
 In Snowflake worksheet:
 
 ```sql
@@ -77,6 +92,7 @@ LIMIT 20;
 ```
 
 ## Notes
+- SQL files are git-ignored in this repo (`*.sql`, `sql/`) per project requirement.
 - Events are sent in 5-second batches; critical events are sent immediately.
 - Failed sends are buffered in browser localStorage and retried.
-- Session filtering for "My Session" works through `session_id` in the analytics API.
+- Session filtering for "My Session" uses `session_id` in analytics API.

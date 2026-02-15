@@ -68,7 +68,7 @@
 
 @layer components {
   .panel {
-    @apply mx-auto w-full max-w-[1320px] rounded-24 border-[3px] border-[#5d4037] bg-panel-bg p-5 md:p-8 shadow-[0_12px_30px_rgba(0,0,0,0.22)];
+    @apply mx-auto w-full max-w-[1480px] rounded-24 border-[3px] border-[#5d4037] bg-panel-bg p-4 md:p-8 shadow-[0_12px_30px_rgba(0,0,0,0.22)];
   }
 
   .muted {
@@ -104,6 +104,14 @@
     aspect-ratio: 16 / 9;
   }
 
+  @media (max-width: 900px) {
+    .gameFrame {
+      aspect-ratio: 9 / 16;
+      width: min(100%, 430px);
+      max-height: 82vh;
+    }
+  }
+
   .gameCanvas {
     @apply block h-full w-full;
   }
@@ -113,7 +121,9 @@
   }
 
   .level-complete-modal {
-    @apply w-[min(92%,520px)] rounded-24 border-[5px] border-[#ff8c00] bg-[linear-gradient(135deg,#ffd93d_0%,#ffa500_100%)] p-6 text-center text-white shadow-[0_10px_0_#cc7000,0_18px_36px_rgba(0,0,0,0.45)];
+    @apply w-[min(94%,560px)] rounded-24 border-[5px] border-[#ff8c00] bg-[linear-gradient(135deg,#ffd93d_0%,#ffa500_100%)] p-4 md:p-6 text-center text-white shadow-[0_10px_0_#cc7000,0_18px_36px_rgba(0,0,0,0.45)];
+    max-height: 88vh;
+    overflow: auto;
   }
 
   .actions {
@@ -144,11 +154,11 @@
   }
 
   .arena-side {
-    @apply order-2 grid gap-3 xl:order-2;
+    @apply order-2 grid grid-cols-2 gap-3 xl:order-2 xl:grid-cols-1;
   }
 
   .wood-card {
-    @apply rounded-2xl border-[3px] border-[#5c341b] px-4 py-3 text-white shadow-[0_6px_0_#4a2b16,0_10px_16px_rgba(0,0,0,0.28)];
+    @apply rounded-2xl border-[3px] border-[#5c341b] px-3 py-2 md:px-4 md:py-3 text-white shadow-[0_6px_0_#4a2b16,0_10px_16px_rgba(0,0,0,0.28)];
     background: linear-gradient(180deg, #a96d3f 0%, #8b4f28 100%);
   }
 
@@ -157,7 +167,7 @@
   }
 
   .wood-value {
-    @apply block font-fredoka text-[20px] font-bold leading-tight;
+    @apply block font-fredoka text-[16px] md:text-[20px] font-bold leading-tight;
     text-shadow:
       -1px -1px 0 #2c3e50,
        1px -1px 0 #2c3e50,

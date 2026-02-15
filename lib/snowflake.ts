@@ -3,7 +3,7 @@ import type { GameEvent } from "@/lib/types";
 
 let connection: snowflake.Connection | null = null;
 
-function isConfigured(): boolean {
+export function isSnowflakeConfigured(): boolean {
   return Boolean(
     process.env.SNOWFLAKE_ACCOUNT &&
       process.env.SNOWFLAKE_USERNAME &&
@@ -15,7 +15,7 @@ function isConfigured(): boolean {
 }
 
 async function getConnection(): Promise<snowflake.Connection | null> {
-  if (!isConfigured()) {
+  if (!isSnowflakeConfigured()) {
     return null;
   }
 
@@ -67,6 +67,8 @@ async function executeStatement<T = unknown>(
   });
 }
 
+const WRITE_BATCH_SIZE = 100;
+
 export async function writeEventsToSnowflake(events: GameEvent[]): Promise<void> {
   if (!events.length) {
     return;
@@ -77,20 +79,32 @@ export async function writeEventsToSnowflake(events: GameEvent[]): Promise<void>
     return;
   }
 
-  const sqlText = `
-    INSERT INTO game_events (event_id, session_id, timestamp, event_type, level, data)
-    SELECT ?, ?, TO_TIMESTAMP_NTZ(? / 1000), ?, ?, PARSE_JSON(?)
-  `;
+  for (let i = 0; i < events.length; i += WRITE_BATCH_SIZE) {
+    const batch = events.slice(i, i + WRITE_BATCH_SIZE);
 
-  for (const event of events) {
-    await executeStatement(conn, sqlText, [
-      event.event_id,
-      event.session_id,
-      event.timestamp,
-      event.event_type,
-      event.level,
-      JSON.stringify(event.data)
-    ]);
+    const valueRows = batch
+      .map(() => "(?, ?, TO_TIMESTAMP_NTZ(? / 1000), ?, ?, PARSE_JSON(?))")
+      .join(",\n");
+
+    const sqlText = `
+      INSERT INTO game_events (event_id, session_id, timestamp, event_type, level, data)
+      VALUES
+      ${valueRows}
+    `;
+
+    const binds: snowflake.Bind[] = [];
+    for (const event of batch) {
+      binds.push(
+        event.event_id,
+        event.session_id,
+        event.timestamp,
+        event.event_type,
+        event.level,
+        JSON.stringify(event.data)
+      );
+    }
+
+    await executeStatement(conn, sqlText, binds);
   }
 }
 
@@ -162,4 +176,62 @@ export async function readEventsFromSnowflake(sessionId: string | null): Promise
     level: Number(row.LEVEL),
     data: parseRowData(row.DATA)
   }));
+}
+
+type HealthRow = {
+  EVENT_COUNT: number;
+  DATABASE_NAME: string;
+  SCHEMA_NAME: string;
+  WAREHOUSE_NAME: string;
+};
+
+export type SnowflakeHealth = {
+  configured: boolean;
+  reachable: boolean;
+  database?: string;
+  schema?: string;
+  warehouse?: string;
+  eventCount?: number;
+  error?: string;
+};
+
+export async function checkSnowflakeHealth(): Promise<SnowflakeHealth> {
+  if (!isSnowflakeConfigured()) {
+    return { configured: false, reachable: false };
+  }
+
+  try {
+    const conn = await getConnection();
+    if (!conn) {
+      return { configured: true, reachable: false, error: "Connection unavailable" };
+    }
+
+    const rows = await executeStatement<HealthRow>(
+      conn,
+      `
+      SELECT
+        COUNT(*) AS event_count,
+        CURRENT_DATABASE() AS database_name,
+        CURRENT_SCHEMA() AS schema_name,
+        CURRENT_WAREHOUSE() AS warehouse_name
+      FROM game_events
+      `
+    );
+
+    const first = rows[0];
+    return {
+      configured: true,
+      reachable: true,
+      database: String(first?.DATABASE_NAME ?? process.env.SNOWFLAKE_DATABASE ?? ""),
+      schema: String(first?.SCHEMA_NAME ?? process.env.SNOWFLAKE_SCHEMA ?? ""),
+      warehouse: String(first?.WAREHOUSE_NAME ?? process.env.SNOWFLAKE_WAREHOUSE ?? ""),
+      eventCount: Number(first?.EVENT_COUNT ?? 0)
+    };
+  } catch (error) {
+    return {
+      configured: true,
+      reachable: false,
+      error: error instanceof Error ? error.message : "Unknown error"
+    };
+  }
 }

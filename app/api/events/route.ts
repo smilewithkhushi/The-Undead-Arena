@@ -21,12 +21,12 @@ export async function POST(req: Request) {
     try {
       await writeEventsToSnowflake(parsed.events);
     } catch (err) {
-      console.error("Snowflake write failed", err);
+      console.error("Snowflake write failed:", err instanceof Error ? err.message : "Unknown error");
     }
 
     return NextResponse.json({ ok: true, accepted: parsed.events.length });
   } catch (err) {
-    console.error("Events route error", err);
+    console.error("Events route error:", err instanceof Error ? err.message : "Unknown error");
     return NextResponse.json({ error: "Failed to process events" }, { status: 500 });
   }
 }

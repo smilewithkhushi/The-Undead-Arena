@@ -11,17 +11,14 @@ import {
   ArcElement
 } from "chart.js";
 import { Bar, Doughnut } from "react-chartjs-2";
-import { getStoredSessionId } from "@/lib/event-client";
 import type { AnalyticsSummary } from "@/lib/types";
 import { StatCard } from "./StatCard";
 import { ChartCard } from "./ChartCard";
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend);
 
-type Scope = "my_session" | "all_players";
-
 const emptySummary: AnalyticsSummary = {
-  scope: "all_players",
+  scope: "my_session",
   sessionId: null,
   overview: {
     gamesPlayed: 0,
@@ -88,34 +85,21 @@ function formatSeconds(value: number): string {
   return `${value.toFixed(1)}s`;
 }
 
-const scopeBtnBase = "font-fredoka text-base font-bold text-white border-[3px] rounded-xl py-2 px-3.5 cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed";
-const scopeBtnInactive = `${scopeBtnBase} bg-gradient-to-b from-[#4c6ef5] to-[#3b5bdb] border-[#2f4bbd]`;
-const scopeBtnActive = `${scopeBtnBase} bg-gradient-to-b from-[#37b24d] to-[#2b8a3e] border-[#1f6f31]`;
-
 export function AnalyticsDashboard() {
   const [data, setData] = useState<AnalyticsSummary>(emptySummary);
-  const [scope, setScope] = useState<Scope>("all_players");
   const [sessionId, setSessionId] = useState<string | null>(null);
-
-  useEffect(() => {
-    const id = getStoredSessionId();
-    if (id) {
-      setSessionId(id);
-      setScope("my_session");
-    }
-  }, []);
 
   useEffect(() => {
     let mounted = true;
 
     const fetchSummary = async () => {
-      const query = scope === "my_session" && sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
-      const res = await fetch(`/api/analytics/summary${query}`, { cache: "no-store" });
+      const res = await fetch("/api/analytics/summary?first_player=true", { cache: "no-store" });
       if (!res.ok || !mounted) {
         return;
       }
       const payload = (await res.json()) as AnalyticsSummary;
       setData(payload);
+      setSessionId(payload.sessionId ?? null);
     };
 
     void fetchSummary();
@@ -124,7 +108,7 @@ export function AnalyticsDashboard() {
       mounted = false;
       window.clearInterval(timer);
     };
-  }, [scope, sessionId]);
+  }, []);
 
   const riskDistributionData = useMemo(
     () => [
@@ -136,11 +120,14 @@ export function AnalyticsDashboard() {
   );
 
   const overviewStats = [
-    { label: "Games played (view)", value: data.overview.gamesPlayed },
+    { label: "Games played (first player)", value: data.overview.gamesPlayed },
     { label: "Total games played (all users)", value: data.overview.globalGamesPlayed },
     { label: "Average score", value: data.overview.averageScore.toFixed(1) },
     { label: "Reached Level 3", value: formatPercent(data.overview.level3CompletionRate) },
-    { label: "Avg time per level", value: data.overview.averageTimePerLevel.map((x) => `L${x.level} ${formatSeconds(x.avgSeconds)}`).join(" | ") }
+    {
+      label: "Avg time per level",
+      value: data.overview.averageTimePerLevel.map((x) => `L${x.level} ${formatSeconds(x.avgSeconds)}`).join(" | ")
+    }
   ];
 
   const gameplayStats = [
@@ -149,21 +136,36 @@ export function AnalyticsDashboard() {
     { label: "Zombies hit", value: data.gameplayBehavior.zombiesHit },
     { label: "Zombies killed", value: data.gameplayBehavior.zombiesKilled },
     { label: "Most failed level", value: data.gameplayBehavior.mostFailedLevel ?? "N/A" },
-    { label: "Avg attempts before completion", value: data.gameplayBehavior.avgAttemptsBeforeComplete.map((x) => `L${x.level} ${x.attempts.toFixed(2)}`).join(" | ") }
+    {
+      label: "Avg attempts before completion",
+      value: data.gameplayBehavior.avgAttemptsBeforeComplete.map((x) => `L${x.level} ${x.attempts.toFixed(2)}`).join(" | ")
+    }
   ];
 
   const laserStats = [
     { label: "Win with SHIELD intact", value: formatPercent(data.laserAnalytics.winRateIntact) },
     { label: "Win with SHIELD destroyed", value: formatPercent(data.laserAnalytics.winRateDestroyed) },
-    { label: "Destroy timing (early/mid/late)", value: `${data.laserAnalytics.destructionTiming.early}/${data.laserAnalytics.destructionTiming.mid}/${data.laserAnalytics.destructionTiming.late}` },
+    {
+      label: "Destroy timing (early/mid/late)",
+      value: `${data.laserAnalytics.destructionTiming.early}/${data.laserAnalytics.destructionTiming.mid}/${data.laserAnalytics.destructionTiming.late}`
+    },
     { label: "Protection rate", value: formatPercent(data.laserAnalytics.protectionRate) },
-    { label: "Protection moves/opportunities", value: `${data.laserAnalytics.protectionMovesTowardThreat}/${data.laserAnalytics.protectionOpportunities}` }
+    {
+      label: "Protection moves/opportunities",
+      value: `${data.laserAnalytics.protectionMovesTowardThreat}/${data.laserAnalytics.protectionOpportunities}`
+    }
   ];
 
   const psychologyStats = [
     { label: "Panic moments", value: data.psychology.panicMoments },
-    { label: "Average reaction time", value: data.psychology.averageReactionTimeMs === null ? "N/A" : `${data.psychology.averageReactionTimeMs.toFixed(0)} ms` },
-    { label: "Risk profile (A/C/S)", value: `${data.psychology.riskProfileDistribution.aggressive}/${data.psychology.riskProfileDistribution.conservative}/${data.psychology.riskProfileDistribution.strategic}` }
+    {
+      label: "Average reaction time",
+      value: data.psychology.averageReactionTimeMs === null ? "N/A" : `${data.psychology.averageReactionTimeMs.toFixed(0)} ms`
+    },
+    {
+      label: "Risk profile (A/C/S)",
+      value: `${data.psychology.riskProfileDistribution.aggressive}/${data.psychology.riskProfileDistribution.conservative}/${data.psychology.riskProfileDistribution.strategic}`
+    }
   ];
 
   const sessionStats = [
@@ -178,22 +180,9 @@ export function AnalyticsDashboard() {
       <h1 className="game-title">The Undead Arena</h1>
       <h2 className="text-center text-3xl font-fredoka font-bold text-text-stroke">Analytics Dashboard</h2>
       <p className="my-2 mb-2.5 text-center font-semibold text-[#1f3b10]">The Game Analytics refresh every 4 seconds.</p>
-
-      <div className="flex gap-2.5 mb-3 flex-wrap justify-center">
-        <button
-          className={scope === "my_session" ? scopeBtnActive : scopeBtnInactive}
-          onClick={() => setScope("my_session")}
-          disabled={!sessionId}
-        >
-          My Session
-        </button>
-        <button
-          className={scope === "all_players" ? scopeBtnActive : scopeBtnInactive}
-          onClick={() => setScope("all_players")}
-        >
-          All Players
-        </button>
-      </div>
+      <p className="mb-3 text-center text-sm font-fredoka text-text-stroke/90">
+        Showing first player session stats{sessionId ? ` (${sessionId.slice(0, 8)}...)` : ""}.
+      </p>
 
       <div className="mb-3 grid w-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Player Overview" stats={overviewStats} />

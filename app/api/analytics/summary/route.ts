@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getEvents } from "@/lib/event-store";
-import { readEventsFromSnowflake } from "@/lib/snowflake";
+import { isSnowflakeConfigured, readEventsFromSnowflake } from "@/lib/snowflake";
 import type { AnalyticsSummary, GameEvent } from "@/lib/types";
 
 function toNumber(input: unknown): number | null {
@@ -35,21 +35,43 @@ function getOutcomeScore(event: GameEvent): number {
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const sessionId = searchParams.get("session_id");
+  const firstPlayerOnly = searchParams.get("first_player") === "true";
+
+  const strictSnowflake = process.env.STRICT_SNOWFLAKE_ANALYTICS === "true";
 
   let allEvents: GameEvent[] = [];
   try {
     const snowflakeEvents = await readEventsFromSnowflake(null);
-    allEvents = (snowflakeEvents ?? getEvents()).slice().sort((a, b) => a.timestamp - b.timestamp);
+
+    if (snowflakeEvents !== null) {
+      allEvents = snowflakeEvents.slice().sort((a, b) => a.timestamp - b.timestamp);
+    } else if (strictSnowflake && isSnowflakeConfigured()) {
+      return NextResponse.json({ error: "Snowflake analytics unavailable" }, { status: 503 });
+    } else {
+      allEvents = getEvents().slice().sort((a, b) => a.timestamp - b.timestamp);
+    }
   } catch (err) {
-    console.error("Snowflake analytics read failed, falling back to memory", err);
+    console.error("Snowflake analytics read failed:", err instanceof Error ? err.message : "Unknown error");
+
+    if (strictSnowflake && isSnowflakeConfigured()) {
+      return NextResponse.json({ error: "Snowflake analytics unavailable" }, { status: 503 });
+    }
+
     allEvents = getEvents().slice().sort((a, b) => a.timestamp - b.timestamp);
   }
 
-  const scopedEvents = sessionId
-    ? allEvents.filter((event) => event.session_id === sessionId)
+  let resolvedSessionId = sessionId;
+
+  if (firstPlayerOnly && allEvents.length) {
+    const firstLevelStart = allEvents.find((event) => event.event_type === "level_started");
+    resolvedSessionId = firstLevelStart?.session_id ?? allEvents[0].session_id;
+  }
+
+  const scopedEvents = resolvedSessionId
+    ? allEvents.filter((event) => event.session_id === resolvedSessionId)
     : allEvents;
 
-  const scope: AnalyticsSummary["scope"] = sessionId ? "my_session" : "all_players";
+  const scope: AnalyticsSummary["scope"] = resolvedSessionId ? "my_session" : "all_players";
 
   const levelStarts = scopedEvents.filter((event) => event.event_type === "level_started");
   const levelCompletions = scopedEvents.filter((event) => event.event_type === "level_completed");
@@ -243,7 +265,7 @@ export async function GET(req: Request) {
 
   const summary: AnalyticsSummary = {
     scope,
-    sessionId,
+    sessionId: resolvedSessionId,
     overview: {
       gamesPlayed: levelStarts.length,
       globalGamesPlayed: allGamesPlayed,

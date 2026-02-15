@@ -45,7 +45,7 @@ export class EventClient {
 
     this.timerId = window.setInterval(() => {
       void this.flush();
-    }, 5000);
+    }, 2000);
 
     window.addEventListener("beforeunload", this.flushSync);
   }
