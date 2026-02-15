@@ -7,6 +7,12 @@ import type { GameEvent, GameEventType } from "@/lib/types";
 export const SESSION_STORAGE_KEY = "pvza_session_id";
 const BACKUP_STORAGE_KEY = "pvza_pending_events";
 
+const FLUSH_INTERVAL_MS = 2000;
+const RETRY_BASE_MS = 1500;
+const RETRY_MAX_MS = 30000;
+const MAX_QUEUE_EVENTS = 1500;
+const EVENT_BATCH_SIZE = 250;
+
 export function getStoredSessionId(): string | null {
   if (typeof window === "undefined") {
     return null;
@@ -27,17 +33,37 @@ function getSessionId(): string {
   return created;
 }
 
+function cappedMergeFront(current: GameEvent[], incoming: GameEvent[]): GameEvent[] {
+  const merged = [...incoming, ...current];
+  if (merged.length <= MAX_QUEUE_EVENTS) {
+    return merged;
+  }
+  return merged.slice(0, MAX_QUEUE_EVENTS);
+}
+
+function cappedPush(queue: GameEvent[], event: GameEvent): GameEvent[] {
+  const next = [...queue, event];
+  if (next.length <= MAX_QUEUE_EVENTS) {
+    return next;
+  }
+  // Keep newest events when capacity is exceeded.
+  return next.slice(next.length - MAX_QUEUE_EVENTS);
+}
+
 export class EventClient {
   private queue: GameEvent[] = [];
   private readonly sessionId = getSessionId();
   private timerId: number | null = null;
+  private retryTimerId: number | null = null;
+  private consecutiveFailures = 0;
+  private flushInFlight = false;
 
   start(): void {
     const backup = window.localStorage.getItem(BACKUP_STORAGE_KEY);
     if (backup) {
       try {
         const parsed = JSON.parse(backup) as GameEvent[];
-        this.queue.push(...parsed);
+        this.queue = cappedMergeFront(this.queue, parsed);
       } catch {
         window.localStorage.removeItem(BACKUP_STORAGE_KEY);
       }
@@ -45,7 +71,7 @@ export class EventClient {
 
     this.timerId = window.setInterval(() => {
       void this.flush();
-    }, 2000);
+    }, FLUSH_INTERVAL_MS);
 
     window.addEventListener("beforeunload", this.flushSync);
   }
@@ -54,6 +80,10 @@ export class EventClient {
     if (this.timerId) {
       window.clearInterval(this.timerId);
       this.timerId = null;
+    }
+    if (this.retryTimerId) {
+      window.clearTimeout(this.retryTimerId);
+      this.retryTimerId = null;
     }
     window.removeEventListener("beforeunload", this.flushSync);
     this.persistBackup();
@@ -69,7 +99,7 @@ export class EventClient {
       data
     };
 
-    this.queue.push(event);
+    this.queue = cappedPush(this.queue, event);
     this.persistBackup();
 
     if (CRITICAL_EVENT_TYPES.has(eventType)) {
@@ -78,28 +108,57 @@ export class EventClient {
   }
 
   async flush(): Promise<void> {
-    if (!this.queue.length) {
+    if (!this.queue.length || this.flushInFlight) {
       return;
     }
 
-    const payload = [...this.queue];
-    this.queue = [];
-    this.persistBackup();
+    this.flushInFlight = true;
 
     try {
-      const res = await fetch("/api/events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events: payload })
-      });
+      while (this.queue.length) {
+        const payload = this.queue.slice(0, EVENT_BATCH_SIZE);
+        this.queue = this.queue.slice(payload.length);
+        this.persistBackup();
 
-      if (!res.ok) {
-        throw new Error(`Failed with status ${res.status}`);
+        try {
+          const res = await fetch("/api/events", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ events: payload })
+          });
+
+          if (!res.ok) {
+            throw new Error(`Failed with status ${res.status}`);
+          }
+        } catch {
+          this.queue = cappedMergeFront(this.queue, payload);
+          this.persistBackup();
+          this.consecutiveFailures += 1;
+          this.scheduleRetry();
+          return;
+        }
       }
-    } catch {
-      this.queue.unshift(...payload);
-      this.persistBackup();
+
+      this.consecutiveFailures = 0;
+      if (this.retryTimerId) {
+        window.clearTimeout(this.retryTimerId);
+        this.retryTimerId = null;
+      }
+    } finally {
+      this.flushInFlight = false;
     }
+  }
+
+  private scheduleRetry(): void {
+    if (this.retryTimerId) {
+      return;
+    }
+
+    const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.max(0, this.consecutiveFailures - 1));
+    this.retryTimerId = window.setTimeout(() => {
+      this.retryTimerId = null;
+      void this.flush();
+    }, delay);
   }
 
   private flushSync = (): void => {
