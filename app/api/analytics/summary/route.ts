@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getEvents } from "@/lib/event-store";
-import { isSnowflakeConfigured, readEventsFromSnowflake } from "@/lib/snowflake";
+import { isSnowflakeConfigured, readEventsFromSnowflake, findFirstSessionId } from "@/lib/snowflake";
 import type { AnalyticsSummary, GameEvent } from "@/lib/types";
 
 function toNumber(input: unknown): number | null {
@@ -39,9 +39,23 @@ export async function GET(req: Request) {
 
   const strictSnowflake = process.env.STRICT_SNOWFLAKE_ANALYTICS === "true";
 
+  let resolvedSessionId = sessionId;
+
+  // Resolve first player's session ID via a lightweight query before reading all events
+  if (firstPlayerOnly && !resolvedSessionId && isSnowflakeConfigured()) {
+    try {
+      const firstSession = await findFirstSessionId();
+      if (firstSession) {
+        resolvedSessionId = firstSession;
+      }
+    } catch {
+      // Will fall through to full read below
+    }
+  }
+
   let allEvents: GameEvent[] = [];
   try {
-    const snowflakeEvents = await readEventsFromSnowflake(null);
+    const snowflakeEvents = await readEventsFromSnowflake(resolvedSessionId);
 
     if (snowflakeEvents !== null) {
       allEvents = snowflakeEvents.slice().sort((a, b) => a.timestamp - b.timestamp);
@@ -60,9 +74,7 @@ export async function GET(req: Request) {
     allEvents = getEvents().slice().sort((a, b) => a.timestamp - b.timestamp);
   }
 
-  let resolvedSessionId = sessionId;
-
-  if (firstPlayerOnly && allEvents.length) {
+  if (firstPlayerOnly && !resolvedSessionId && allEvents.length) {
     const firstLevelStart = allEvents.find((event) => event.event_type === "level_started");
     resolvedSessionId = firstLevelStart?.session_id ?? allEvents[0].session_id;
   }

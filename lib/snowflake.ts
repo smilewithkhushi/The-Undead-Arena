@@ -1,7 +1,11 @@
 import snowflake from "snowflake-sdk";
 import type { GameEvent } from "@/lib/types";
 
-let connection: snowflake.Connection | null = null;
+snowflake.configure({ logLevel: "WARN" });
+
+const globalSnowflake = globalThis as typeof globalThis & {
+  __snowflakeConnection?: snowflake.Connection;
+};
 
 export function isSnowflakeConfigured(): boolean {
   return Boolean(
@@ -19,8 +23,8 @@ async function getConnection(): Promise<snowflake.Connection | null> {
     return null;
   }
 
-  if (connection) {
-    return connection;
+  if (globalSnowflake.__snowflakeConnection) {
+    return globalSnowflake.__snowflakeConnection;
   }
 
   const created = snowflake.createConnection({
@@ -43,8 +47,8 @@ async function getConnection(): Promise<snowflake.Connection | null> {
     });
   });
 
-  connection = created;
-  return connection;
+  globalSnowflake.__snowflakeConnection = created;
+  return created;
 }
 
 async function executeStatement<T = unknown>(
@@ -83,12 +87,19 @@ export async function writeEventsToSnowflake(events: GameEvent[]): Promise<void>
     const batch = events.slice(i, i + WRITE_BATCH_SIZE);
 
     const valueRows = batch
-      .map(() => "(?, ?, TO_TIMESTAMP_NTZ(? / 1000), ?, ?, PARSE_JSON(?))")
+      .map(() => "(?, ?, ?, ?, ?, ?)")
       .join(",\n");
 
     const sqlText = `
       INSERT INTO game_events (event_id, session_id, timestamp, event_type, level, data)
-      VALUES
+      SELECT
+        column1::varchar,
+        column2::varchar,
+        column3::timestamp_ntz,
+        column4::varchar,
+        column5::integer,
+        PARSE_JSON(column6)
+      FROM VALUES
       ${valueRows}
     `;
 
@@ -97,7 +108,7 @@ export async function writeEventsToSnowflake(events: GameEvent[]): Promise<void>
       binds.push(
         event.event_id,
         event.session_id,
-        event.timestamp,
+        new Date(event.timestamp).toISOString(),
         event.event_type,
         event.level,
         JSON.stringify(event.data)
@@ -176,6 +187,26 @@ export async function readEventsFromSnowflake(sessionId: string | null): Promise
     level: Number(row.LEVEL),
     data: parseRowData(row.DATA)
   }));
+}
+
+export async function findFirstSessionId(): Promise<string | null> {
+  const conn = await getConnection();
+  if (!conn) {
+    return null;
+  }
+
+  const rows = await executeStatement<{ SESSION_ID: string }>(
+    conn,
+    `
+    SELECT session_id
+    FROM game_events
+    WHERE event_type = 'level_started'
+    ORDER BY timestamp ASC
+    LIMIT 1
+    `
+  );
+
+  return rows.length ? String(rows[0].SESSION_ID) : null;
 }
 
 type HealthRow = {

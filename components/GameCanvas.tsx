@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventClient } from "@/lib/event-client";
 import { FIBONACCI_LEVELS, GAME_CONFIG, LEVEL_CONFIG, LEVEL_COUNT, type LevelNumber } from "@/lib/game-config";
+import { StoryOverlay } from "@/components/StoryOverlay";
 
 type GameStatus = "idle" | "running" | "won" | "lost" | "finished";
 type PlantType = "basic" | "double" | "triple";
@@ -133,6 +134,12 @@ export function GameCanvas() {
   const soundsRef = useRef<Partial<Record<SoundKey, HTMLAudioElement>>>({});
   const soundLastPlayedAtRef = useRef<Partial<Record<SoundKey, number>>>({});
   const runScoreRef = useRef<number>(0);
+  const hasRunSessionRef = useRef<boolean>(false);
+  const touchDragRef = useRef<{ active: boolean; pointerId: number | null; lastClientX: number }>({
+    active: false,
+    pointerId: null,
+    lastClientX: 0
+  });
 
   const [level, setLevel] = useState<LevelNumber>(1);
   const [status, setStatus] = useState<GameStatus>("idle");
@@ -148,6 +155,7 @@ export function GameCanvas() {
   const [plantModalLevel, setPlantModalLevel] = useState<number | null>(null);
   const [catalystKills, setCatalystKills] = useState<number>(0);
   const [unlockNotice, setUnlockNotice] = useState<string | null>(null);
+  const [showStory, setShowStory] = useState<boolean>(false);
 
   const runtimeRef = useRef({
     cartX: CANVAS_W / 2 - GAME_CONFIG.cart.width / 2,
@@ -215,6 +223,38 @@ export function GameCanvas() {
     });
   }, []);
 
+  const handleTouchPointerDown = useCallback((e: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+    touchDragRef.current = {
+      active: true,
+      pointerId: e.pointerId,
+      lastClientX: e.clientX
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, []);
+
+  const handleTouchPointerMove = useCallback((e: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+    const drag = touchDragRef.current;
+    if (!drag.active || drag.pointerId !== e.pointerId) return;
+
+    const dx = e.clientX - drag.lastClientX;
+    drag.lastClientX = e.clientX;
+
+    const rt = runtimeRef.current;
+    rt.cartX = Math.max(0, Math.min(CANVAS_W - GAME_CONFIG.cart.width, rt.cartX + dx));
+  }, []);
+
+  const handleTouchPointerUp = useCallback((e: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+    const drag = touchDragRef.current;
+    if (drag.pointerId !== e.pointerId) return;
+    touchDragRef.current = { active: false, pointerId: null, lastClientX: 0 };
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }, []);
+
   useEffect(() => {
     let resolvedUnlockedPlants: PlantType[] = ["basic"];
 
@@ -244,6 +284,7 @@ export function GameCanvas() {
     }
 
     const runSessionRaw = window.sessionStorage.getItem(RUN_SESSION_STORAGE_KEY);
+    hasRunSessionRef.current = Boolean(runSessionRaw);
     if (runSessionRaw) {
       try {
         const parsed = JSON.parse(runSessionRaw) as RunSessionState;
@@ -268,8 +309,11 @@ export function GameCanvas() {
         setScore(restoredScore);
       } catch {
         window.sessionStorage.removeItem(RUN_SESSION_STORAGE_KEY);
+        hasRunSessionRef.current = false;
+        setShowStory(true);
       }
     }
+    setShowStory(true);
   }, []);
 
   useEffect(() => {
@@ -401,6 +445,20 @@ export function GameCanvas() {
       active_plant: plant
     });
   }, [playSound, shieldCooldownUntilLevel, status]);
+
+  const handleStoryBegin = useCallback(() => {
+    if (hasRunSessionRef.current) {
+      setShowStory(false);
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(RUN_SESSION_STORAGE_KEY);
+    }
+    resetRunScore();
+    setShieldCooldownUntilLevel(0);
+    setShowStory(false);
+    startLevel(1, activePlant);
+  }, [activePlant, startLevel]);
 
   useEffect(() => {
     const client = new EventClient();
@@ -828,7 +886,8 @@ export function GameCanvas() {
   }, [activePlant, catalystKills, level, levelCfg, playSound, status, unlockedPlants]);
 
   return (
-    <section className="panel max-w-[1600px]">
+    <>
+    <section className="panel max-w-[1600px] game-cursor">
       <h1 className="game-title">The Undead Arena</h1>
       <p className="muted">Shoot zombies and protect your base from being infected!</p>
 
@@ -844,7 +903,16 @@ export function GameCanvas() {
 
         <div className="gameFrameWrap">
         <div className="gameFrame">
-          <canvas ref={canvasRef} width={CANVAS_W} height={CANVAS_H} className="gameCanvas" />
+          <canvas
+            ref={canvasRef}
+            width={CANVAS_W}
+            height={CANVAS_H}
+            className="gameCanvas"
+            onPointerDown={handleTouchPointerDown}
+            onPointerMove={handleTouchPointerMove}
+            onPointerUp={handleTouchPointerUp}
+            onPointerCancel={handleTouchPointerUp}
+          />
 
           {(status === "won" || status === "lost" || status === "finished") && (
             <div className="modal-overlay">
@@ -974,6 +1042,8 @@ export function GameCanvas() {
         )}
       </div>
     </section>
+    {showStory && <StoryOverlay onBegin={handleStoryBegin} onSkip={handleStoryBegin} />}
+    </>
   );
 }
 
