@@ -80,7 +80,7 @@
   }
 
   .muted {
-    @apply mt-3 mb-3 text-[20px] max-md:text-[16px] text-text-stroke/95;
+    @apply mt-3 mb-3 w-full text-center text-[20px] max-md:text-[16px] text-text-stroke/95;
   }
 
   .hud-top {

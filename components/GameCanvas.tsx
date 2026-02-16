@@ -108,7 +108,7 @@ const soundVolume: Record<SoundKey, number> = {
   gameBonus: 0.5,
   retroLaser: 0.35,
   shieldBreak: 0.6,
-  shoot: 0.25,
+  shoot: 0.16,
   zombieDeath: 0.35,
   zombieSpawn: 0.28
 };
@@ -591,20 +591,19 @@ export function GameCanvas() {
         rt.previousCartX = rt.cartX;
 
         rt.msSinceShot += deltaMs;
-        const playShoot = () => playSound("shoot", 70);
 
         if (activePlant === "double") {
           if (rt.doubleSecondPending) {
             rt.doubleSecondDelayMs -= deltaMs;
             if (rt.doubleSecondDelayMs <= 0) {
-              spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current, playShoot);
+              spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
               rt.doubleSecondPending = false;
             }
           }
 
           if (rt.msSinceShot >= GAME_CONFIG.pea.fireIntervalMs && !rt.doubleSecondPending) {
             rt.msSinceShot = 0;
-            spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current, playShoot);
+            spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
             rt.doubleSecondPending = true;
             rt.doubleSecondDelayMs = 500;
           }
@@ -612,12 +611,12 @@ export function GameCanvas() {
           rt.msSinceShot = 0;
 
           if (activePlant === "basic") {
-            spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current, playShoot);
+            spawnPea(rt, rt.cartX + GAME_CONFIG.cart.width / 2, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
           } else {
             const baseX = rt.cartX + GAME_CONFIG.cart.width / 2;
-            spawnPea(rt, baseX - 28, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current, playShoot);
-            spawnPea(rt, baseX, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current, playShoot);
-            spawnPea(rt, baseX + 28, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current, playShoot);
+            spawnPea(rt, baseX - 28, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
+            spawnPea(rt, baseX, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
+            spawnPea(rt, baseX + 28, GAME_CONFIG.cart.startY - GAME_CONFIG.cart.height, false, 1, level, eventClientRef.current);
           }
         }
 
@@ -786,6 +785,7 @@ export function GameCanvas() {
             if (!hitZombie) continue;
 
             consumed = true;
+            playSound("shoot", 45);
             zombie.health -= GAME_CONFIG.pea.damage;
             rt.hits += 1;
 
@@ -1058,8 +1058,7 @@ function spawnPea(
   wasMultiplied: boolean,
   speedFactor: number,
   level: number,
-  eventClient: EventClient | null,
-  onPeaFired?: () => void
+  eventClient: EventClient | null
 ): void {
   runtime.peas.push({
     id: runtime.nextPeaId++,
@@ -1079,7 +1078,6 @@ function spawnPea(
     cart_x: Math.round(x),
     laser_aligned: Math.abs(x - CANVAS_W / 2) < 110
   });
-  onPeaFired?.();
 }
 
 function createZombie(kind: ZombieKind, id: number, baseSpeed: number, level: number): Zombie {

@@ -8,6 +8,21 @@ Built for the **Snowflake Buildathon** — The Undead Arena combines a fully pla
 
 ---
 
+## Game in Action
+
+<table>
+  <tr>
+    <td><img src="public/output/ss1.png" alt="Gameplay Screenshot 1" width="100%"/></td>
+    <td><img src="public/output/ss2.png" alt="Gameplay Screenshot 2" width="100%"/></td>
+  </tr>
+  <tr>
+    <td><img src="public/output/ss3.png" alt="Gameplay Screenshot 3" width="100%"/></td>
+    <td><img src="public/output/ss4.png" alt="Gameplay Screenshot 4" width="100%"/></td>
+  </tr>
+</table>
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -102,31 +117,6 @@ Every kill, every level, every game over is a data point — captured, batched, 
 - **Playable-first design** — the game is genuinely engaging, not just a data demo.
 - **Session-aware dashboard** — high-signal metrics computed directly from Snowflake queries.
 
----
 
-## Quick Start
-
-```bash
-npm install
-npm run dev
-```
-
-Create `.env.local`:
-```env
-SNOWFLAKE_ACCOUNT=
-SNOWFLAKE_USERNAME=
-SNOWFLAKE_PASSWORD=
-SNOWFLAKE_WAREHOUSE=UNDEAD_ARENA_WH
-SNOWFLAKE_DATABASE=UNDEAD_ARENA_DB
-SNOWFLAKE_SCHEMA=GAME
-SNOWFLAKE_ROLE=
-STRICT_SNOWFLAKE_ANALYTICS=false
-```
-
-Validate connectivity at `/api/snowflake/health`, then play a session and view analytics at `/dashboard`.
-
----
-
-## Demo
 
 

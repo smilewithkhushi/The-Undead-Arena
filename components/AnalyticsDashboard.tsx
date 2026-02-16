@@ -121,7 +121,6 @@ export function AnalyticsDashboard() {
 
   const overviewStats = [
     { label: "Games played (first player)", value: data.overview.gamesPlayed },
-    { label: "Total games played (all users)", value: data.overview.globalGamesPlayed },
     { label: "Average score", value: data.overview.averageScore.toFixed(1) },
     { label: "Reached Level 3", value: formatPercent(data.overview.level3CompletionRate) },
     {
@@ -177,14 +176,10 @@ export function AnalyticsDashboard() {
 
   return (
     <section className="panel max-w-[980px]">
-      <h1 className="game-title">The Undead Arena</h1>
       <h2 className="text-center text-3xl font-fredoka font-bold text-text-stroke">Analytics Dashboard</h2>
-      <p className="my-2 mb-2.5 text-center font-semibold text-[#1f3b10]">The Game Analytics refresh every 4 seconds.</p>
-      <p className="mb-3 text-center text-sm font-fredoka text-text-stroke/90">
-        Showing first player session stats{sessionId ? ` (${sessionId.slice(0, 8)}...)` : ""}.
-      </p>
+      <p className="my-2 mb-3 text-center font-semibold text-[#1f3b10]">Showing your session stats!</p>
 
-      <div className="mb-3 grid w-full grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mb-4 grid w-full grid-cols-[repeat(auto-fit,minmax(240px,1fr))] justify-items-center gap-4">
         <StatCard title="Player Overview" stats={overviewStats} />
         <StatCard title="Gameplay Behavior" stats={gameplayStats} />
         <StatCard title="Laser Analytics" stats={laserStats} />
@@ -192,7 +187,7 @@ export function AnalyticsDashboard() {
         <StatCard title="Session Patterns" stats={sessionStats} />
       </div>
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-3 w-full">
+      <div className="grid w-full grid-cols-[repeat(auto-fit,minmax(300px,1fr))] justify-items-center gap-6 md:gap-8">
         <ChartCard title="Progression Funnel">
           <Bar
             data={{
