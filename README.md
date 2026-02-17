@@ -6,6 +6,8 @@ Built for the **Snowflake Buildathon** — The Undead Arena combines a fully pla
 
 > Play the game. Unlock shooter plants. Kill the zombies. Watch the data flow.
 
+[GitHub Repo](https://github.com/smilewithkhushi/The-Undead-Arena) | [Live Demo](https://undeadarena.vercel.app) | [Video Walkthrough](https://www.youtube.com/watch?v=ppSbajT7Pf0)
+
 ---
 
 ## Game in Action
@@ -20,6 +22,19 @@ Built for the **Snowflake Buildathon** — The Undead Arena combines a fully pla
     <td><img src="public/output/ss4.png" alt="Gameplay Screenshot 4" width="100%"/></td>
   </tr>
 </table>
+
+---
+
+## How to Play
+
+- **Move your shooter plant** using the **left/right arrow keys** on keyboard, or **swipe left/right** on touchscreen devices.
+- **Shoot peas** to kill incoming zombies before they reach your lane's end.
+- **Activate the laser shield** for a protective barrier that also multiplies your pea damage (2x/3x) — but it has a cooldown once destroyed, so use it wisely.
+- **Survive waves** of increasingly difficult zombies to unlock higher levels and stronger shooter plants.
+
+**Zombie types** — Rotter, Ironhead, DrDecay, Shambler, Catalyst — each with unique HP, speed, and behavior.
+
+**Shooter plants** — Basic (single shot), Double (two-way shot), Triple (three-way shot) — unlocked as you progress through levels.
 
 ---
 
@@ -117,6 +132,65 @@ Every kill, every level, every game over is a data point — captured, batched, 
 - **Playable-first design** — the game is genuinely engaging, not just a data demo.
 - **Session-aware dashboard** — high-signal metrics computed directly from Snowflake queries.
 
+---
 
+## Getting Started
+
+### Prerequisites
+
+- Node.js 18+
+- A [Snowflake](https://www.snowflake.com/) account
+
+### Snowflake Setup
+
+Run the following in your Snowflake worksheet to create the required objects:
+
+```sql
+CREATE WAREHOUSE IF NOT EXISTS UNDEAD_ARENA_WH WITH WAREHOUSE_SIZE = 'XSMALL';
+CREATE DATABASE IF NOT EXISTS UNDEAD_ARENA_DB;
+CREATE SCHEMA IF NOT EXISTS UNDEAD_ARENA_DB.GAME;
+
+CREATE TABLE IF NOT EXISTS UNDEAD_ARENA_DB.GAME.GAME_EVENTS (
+  EVENT_ID STRING,
+  SESSION_ID STRING,
+  TIMESTAMP TIMESTAMP_NTZ,
+  EVENT_TYPE STRING,
+  LEVEL INTEGER,
+  DATA VARIANT
+);
+```
+
+### Installation
+
+```bash
+git clone https://github.com/smilewithkhushi/The-Undead-Arena.git
+cd The-Undead-Arena
+npm install
+```
+
+### Environment Variables
+
+Create a `.env.local` file in the project root:
+
+```env
+SNOWFLAKE_ACCOUNT=<your_account_identifier>
+SNOWFLAKE_USERNAME=<your_username>
+SNOWFLAKE_PASSWORD=<your_password>
+SNOWFLAKE_DATABASE=UNDEAD_ARENA_DB
+SNOWFLAKE_SCHEMA=GAME
+SNOWFLAKE_WAREHOUSE=UNDEAD_ARENA_WH
+SNOWFLAKE_ROLE=ACCOUNTADMIN
+STRICT_SNOWFLAKE_ANALYTICS=false
+```
+
+> Set `STRICT_SNOWFLAKE_ANALYTICS=false` to allow the game to run even if Snowflake is unreachable (analytics will fall back to in-memory).
+
+### Run
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) and start defending your lanes.
 
 
